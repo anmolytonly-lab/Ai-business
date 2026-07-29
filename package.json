@@ -1,0 +1,31 @@
+{
+  "name": "agentcorp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "AgentCorp — a fully autonomous AI-run business. Phase 1: scaffold, DB schema, LLM provider.",
+  "type": "commonjs",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node -e \"require('fs').cpSync('src/db/migrations','dist/db/migrations',{recursive:true})\"",
+    "start": "node dist/index.js",
+    "dev": "npm run build && node dist/index.js",
+    "migrate": "npm run build && node dist/db/migrate.js",
+    "demo:llm": "npm run build && node dist/scripts/demo-llm.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.10.0",
+    "express": "^4.21.2",
+    "sqlite-vec": "^0.1.6",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.2"
+  }
+}
