@@ -13,6 +13,7 @@
     "demo:llm": "npm run build && node dist/scripts/demo-llm.js",
     "demo:agent": "npm run build && node dist/scripts/demo-agent.js",
     "demo:goal": "npm run build && node dist/scripts/demo-goal.js",
+    "demo:tools": "npm run build && node dist/scripts/demo-tools.js",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "engines": {

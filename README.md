@@ -4,9 +4,9 @@ A fully autonomous AI-run business: an AI executive team handles strategy,
 product, marketing, sales, support, finance and reporting. A human owner sets
 goals and approves critical actions; everything else is automated.
 
-**Status: Phase 3 complete** — the CEO decomposes an owner goal into a task
-DAG and the TaskRunner executes it with dependency-aware parallelism, under
-hard caps.
+**Status: Phase 4 complete** — agents can use tools, with per-agent
+permissions, a `/workspace`-only filesystem sandbox and a shell command
+whitelist.
 
 ## Stack
 
@@ -41,6 +41,8 @@ npm run demo:llm   # Phase 1 demo: one Gemini call (text + validated JSON) with 
 prints its audit trail (defaults to `seo_writer`).
 `npm run demo:goal ["goal"]` runs the full Phase 3 loop: owner goal → CEO
 plan → DAG execution → report.
+`npm run demo:tools` shows an agent writing and running a file in the
+sandbox, and an agent being refused a tool it wasn't granted.
 
 ### Endpoints
 
@@ -51,6 +53,7 @@ plan → DAG execution → report.
 | `GET /api/agents` | Registry summary (id, department, reporting line, tools) |
 | `GET /api/agents/:id` | Full agent config including system prompt |
 | `POST /api/agents/:id/run` `{ "instruction": "..." }` | Execute one agent, fully audited |
+| `GET /api/tools` | Available tools, sandbox root, shell whitelist |
 | `POST /api/goals` `{ "description": "..." }` | Set a goal; CEO plans and runs it (202, then poll) |
 | `GET /api/goals` | All goals with status and final report |
 | `GET /api/goals/:id` | One goal plus its full task DAG |
@@ -95,6 +98,9 @@ src/
   orchestration/planner.ts  # CEO goal -> validated task DAG + hard caps
   orchestration/runner.ts   # TaskRunner: dependency-aware parallel execution
   orchestration/goals.ts    # create/execute/read goals
+  tools/sandbox.ts       # workspace path resolution + command whitelist
+  tools/registry.ts      # tool registry + permission enforcement + audit
+  tools/impl/            # file, shell, db tools and Phase 6/10 stubs
   workspace.ts           # default workspace bootstrap (multi-tenant in Phase 10)
   config/env.ts          # .env loading + zod validation
   db/index.ts            # better-sqlite3 connection, sqlite-vec load, migration runner
@@ -104,9 +110,61 @@ src/
   scripts/demo-llm.ts    # Phase 1 demo call
   scripts/demo-agent.ts  # Phase 2 demo: run one agent + show audit trail
   scripts/demo-goal.ts   # Phase 3 demo: goal -> DAG -> execution report
+  scripts/demo-tools.ts  # Phase 4 demo: sandboxed tool use + permission denial
+workspace/               # agent filesystem sandbox (gitignored)
   index.ts               # Express server
 data/                    # SQLite database (gitignored)
 ```
+
+## Tools & sandbox (Phase 4)
+
+Agents call tools through Gemini's native function calling. An agent is only
+*offered* the tools in its own `tools[]`, and `callTool()` re-checks the grant
+before executing — the model never sees a tool it can't use, and couldn't use
+one if it guessed the name.
+
+| Tool | Grantee example | Notes |
+|---|---|---|
+| `file_read` / `file_write` / `file_list` | developer, devops | Workspace-relative paths only |
+| `shell` | developer, devops, qa_tester | Whitelisted commands, no shell interpreter |
+| `db_query` | analyst, cfo, bookkeeper | Read-only SELECT, restricted tables |
+| `kb_search` / `kb_write` | most content agents | **Stub** until Phase 6 |
+| `web_search` | researcher, seo_writer | **Stub** until Phase 10 |
+
+Stubs return an explicit "not available" message that tells the agent not to
+invent an answer, rather than silently returning nothing.
+
+### Safety boundaries
+
+**Filesystem** — everything resolves under `AGENT_WORKSPACE_ROOT` (default
+`./workspace`). Rejected, not sanitised: absolute paths, `..` traversal, null
+bytes, and symlinks pointing outside the workspace (checked via `realpath` on
+both the target and its nearest existing ancestor).
+
+**Shell** — commands run through `execFile` with `shell: false`, so pipes,
+redirects and chaining are structurally impossible. The command must be a
+bare whitelisted name (no paths), arguments containing shell metacharacters
+are rejected, execution is capped at 30s, and the child process gets a minimal
+environment — it never inherits `GEMINI_API_KEY`. The default whitelist
+deliberately excludes `rm`, `mv`, `sudo`, `curl`, `wget` and `git`; add more
+via `SHELL_WHITELIST_EXTRA`.
+
+**Database** — `db_query` accepts a single statement, requires SELECT/WITH,
+verifies `statement.readonly` via better-sqlite3, blocks `llm_calls`,
+`approvals` and `workspaces`, and caps results at 100 rows.
+
+**Cost** — the tool loop checks accumulated spend against the agent's
+`maxCostPerTask` on every iteration and stops mid-loop if exceeded; it also
+halts after 8 iterations so a confused agent can't spin.
+
+Every tool call is audited: `tool_call_started`, `tool_call_completed`,
+`tool_call_failed`, `tool_permission_denied`, `tool_sandbox_violation`.
+
+Verified with 29 security tests (traversal, symlink escape, `rm -rf`,
+metacharacter injection, cross-agent permission denial, SQL write/multi-
+statement/restricted-table rejection) — all rejected and audited. In the live
+demo the `developer` agent wrote `fizzbuzz.js` and executed it for real
+output, while `seo_writer` correctly reported it had no shell access.
 
 ## Orchestration (Phase 3)
 
@@ -178,7 +236,7 @@ Tables created by `001_init.sql`, sized for the phases ahead:
 1. ✅ Scaffold, .env.example, DB schema, LLM provider, one working Gemini call
 2. ✅ Agent registry (`/agents/*.json`) + single-agent execution + full audit logging
 3. ✅ CEO orchestration, task DAG, TaskRunner with dependencies
-4. Tool system with per-agent permissions + sandbox
+4. ✅ Tool system with per-agent permissions + sandbox
 5. Critic loop + revision rounds + escalation
 6. Company Brain (embeddings, retrieval, handbook injection)
 7. Human approval queue + budget guard + kill switch

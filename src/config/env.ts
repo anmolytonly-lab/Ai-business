@@ -32,6 +32,10 @@ const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(3000),
   DATABASE_PATH: z.string().default("./data/agentcorp.db"),
   DAILY_BUDGET_USD: z.coerce.number().nonnegative().default(5),
+  /** Filesystem sandbox root — agents can never read or write outside this. */
+  AGENT_WORKSPACE_ROOT: z.string().default("./workspace"),
+  /** Extra whitelisted shell commands, comma-separated. Empty by default. */
+  SHELL_WHITELIST_EXTRA: z.string().default(""),
 });
 
 export type Env = z.infer<typeof envSchema>;

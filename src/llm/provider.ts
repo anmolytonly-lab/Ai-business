@@ -9,9 +9,12 @@ import { getDb } from "../db";
 import {
   ChatMessage,
   GenerateOptions,
+  GeminiContent,
   LlmError,
   LlmResult,
+  LlmStepResult,
   LlmUsage,
+  ToolDeclaration,
 } from "./types";
 
 const API_BASE = "https://generativelanguage.googleapis.com/v1beta";
@@ -37,7 +40,12 @@ function estimateCost(model: string, inputTokens: number, outputTokens: number):
 
 interface GeminiResponse {
   candidates?: {
-    content?: { parts?: { text?: string }[] };
+    content?: {
+      parts?: {
+        text?: string;
+        functionCall?: { name?: string; args?: Record<string, unknown> };
+      }[];
+    };
     finishReason?: string;
   }[];
   usageMetadata?: {
@@ -87,18 +95,29 @@ function logCall(
   }
 }
 
+/**
+ * Core request. Takes Gemini `contents` directly so callers can carry tool
+ * calls and tool responses through a multi-step loop.
+ */
 async function callGemini(
-  messages: ChatMessage[],
-  opts: GenerateOptions
-): Promise<LlmResult> {
+  contents: GeminiContent[],
+  opts: GenerateOptions,
+  tools?: ToolDeclaration[]
+): Promise<LlmStepResult> {
   const apiKey = requireGeminiKey();
   const model = opts.model ?? env.GEMINI_MODEL;
   const url = `${API_BASE}/models/${model}:generateContent`;
 
   const body = {
-    contents: messages.map((m) => ({ role: m.role, parts: [{ text: m.content }] })),
+    contents,
     ...(opts.systemPrompt !== undefined
       ? { systemInstruction: { parts: [{ text: opts.systemPrompt }] } }
+      : {}),
+    ...(tools !== undefined && tools.length > 0
+      ? {
+          tools: [{ functionDeclarations: tools }],
+          toolConfig: { functionCallingConfig: { mode: "AUTO" } },
+        }
       : {}),
     generationConfig: {
       ...(opts.temperature !== undefined ? { temperature: opts.temperature } : {}),
@@ -108,7 +127,7 @@ async function callGemini(
     },
   };
 
-  const requestJson = JSON.stringify(messages);
+  const requestJson = JSON.stringify(contents);
   const started = Date.now();
   let lastError: LlmError = new LlmError("Gemini call failed before any attempt");
 
@@ -164,8 +183,15 @@ async function callGemini(
     }
 
     const latencyMs = Date.now() - started;
-    const text =
-      raw.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
+    const parts = raw.candidates?.[0]?.content?.parts ?? [];
+    const text = parts.map((p) => p.text ?? "").join("");
+    const functionCalls = parts
+      .filter((p) => p.functionCall?.name !== undefined)
+      .map((p) => ({
+        name: p.functionCall?.name ?? "",
+        args: p.functionCall?.args ?? {},
+      }));
+
     const inputTokens = raw.usageMetadata?.promptTokenCount ?? 0;
     const outputTokens =
       (raw.usageMetadata?.candidatesTokenCount ?? 0) +
@@ -178,15 +204,20 @@ async function callGemini(
       model,
     };
 
-    if (text === "") {
+    // A step with no text is fine when the model asked for tools instead.
+    if (text === "" && functionCalls.length === 0) {
       const reason = raw.candidates?.[0]?.finishReason ?? "no candidates returned";
-      const error = new LlmError(`Gemini returned empty text (${reason})`, res.status, false);
+      const error = new LlmError(`Gemini returned empty response (${reason})`, res.status, false);
       logCall(opts, model, requestJson, JSON.stringify(raw), usage, error.message);
       throw error;
     }
 
-    logCall(opts, model, requestJson, text, usage);
-    return { text, usage };
+    const logged =
+      functionCalls.length > 0
+        ? `${text}\n[tool calls: ${JSON.stringify(functionCalls)}]`
+        : text;
+    logCall(opts, model, requestJson, logged, usage);
+    return { text, functionCalls, usage };
   }
 
   const latencyMs = Date.now() - started;
@@ -201,20 +232,38 @@ async function callGemini(
   throw lastError;
 }
 
+function toContents(messages: ChatMessage[]): GeminiContent[] {
+  return messages.map((m) => ({ role: m.role, parts: [{ text: m.content }] }));
+}
+
 /** Plain text generation from a single prompt. */
 export async function generateText(
   prompt: string,
   opts: GenerateOptions = {}
 ): Promise<LlmResult> {
-  return callGemini([{ role: "user", content: prompt }], opts);
+  const step = await callGemini(toContents([{ role: "user", content: prompt }]), opts);
+  return { text: step.text, usage: step.usage };
 }
 
-/** Multi-turn generation (agent conversations from Phase 2 on). */
+/** Multi-turn generation. */
 export async function generateChat(
   messages: ChatMessage[],
   opts: GenerateOptions = {}
 ): Promise<LlmResult> {
-  return callGemini(messages, opts);
+  const step = await callGemini(toContents(messages), opts);
+  return { text: step.text, usage: step.usage };
+}
+
+/**
+ * One step of a tool-using conversation: the model either answers with text or
+ * requests tool calls. The caller executes the tools and appends the results.
+ */
+export async function generateStep(
+  contents: GeminiContent[],
+  tools: ToolDeclaration[],
+  opts: GenerateOptions = {}
+): Promise<LlmStepResult> {
+  return callGemini(contents, opts, tools);
 }
 
 function stripFences(text: string): string {

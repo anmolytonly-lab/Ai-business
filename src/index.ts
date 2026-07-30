@@ -7,6 +7,8 @@ import { getDb, isVecAvailable } from "./db";
 import { generateText } from "./llm/provider";
 import { LlmError } from "./llm/types";
 import { createGoal, executeGoal, getGoal, listGoals } from "./orchestration/goals";
+import { listTools } from "./tools/registry";
+import { commandWhitelist, workspaceRoot } from "./tools/sandbox";
 import { DEFAULT_WORKSPACE_ID, ensureDefaultWorkspace } from "./workspace";
 
 const app = express();
@@ -28,7 +30,7 @@ app.get("/api/status", (_req, res) => {
     )
     .get() as { usd: number };
   res.json({
-    phase: 3,
+    phase: 4,
     database: env.DATABASE_PATH,
     migrations: migrations.map((m) => m.name),
     vectorSearch: isVecAvailable(),
@@ -80,6 +82,16 @@ app.post("/api/agents/:id/run", (req, res) => {
       const status = message.startsWith("unknown agent") ? 404 : 502;
       res.status(status).json({ error: message });
     });
+});
+
+// ── Tools ─────────────────────────────────────────────────────────────
+
+app.get("/api/tools", (_req, res) => {
+  res.json({
+    tools: listTools(),
+    sandboxRoot: workspaceRoot(),
+    shellWhitelist: commandWhitelist(),
+  });
 });
 
 // ── Goals & orchestration ─────────────────────────────────────────────
@@ -144,15 +156,16 @@ app.post("/api/llm/test", (req, res) => {
 getDb(); // open DB + run migrations before accepting traffic
 ensureDefaultWorkspace();
 initRegistry();
-logEvent({ workspaceId: DEFAULT_WORKSPACE_ID, eventType: "server_started", detail: { phase: 3 } });
+logEvent({ workspaceId: DEFAULT_WORKSPACE_ID, eventType: "server_started", detail: { phase: 4 } });
 
 app.listen(env.PORT, () => {
-  console.log(`AgentCorp (Phase 3) listening on http://localhost:${env.PORT}`);
+  console.log(`AgentCorp (Phase 4) listening on http://localhost:${env.PORT}`);
   console.log(`  GET  /health`);
   console.log(`  GET  /api/status`);
   console.log(`  GET  /api/agents            list the registry`);
   console.log(`  GET  /api/agents/:id        full agent config`);
   console.log(`  POST /api/agents/:id/run    { "instruction": "..." }`);
+  console.log(`  GET  /api/tools             tools, sandbox root, shell whitelist`);
   console.log(`  POST /api/goals             { "description": "..." } -> CEO plans + runs DAG`);
   console.log(`  GET  /api/goals             list goals`);
   console.log(`  GET  /api/goals/:id         goal + its task DAG`);
