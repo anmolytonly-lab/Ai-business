@@ -49,6 +49,30 @@ specific, unhurried. Never like an advert shouting.
   client's gender from a service — no "ladies' cut" / "gents' cut" framing in
   new copy.
 
+## Language
+
+**Marketing content is written in Hindi, in Devanagari script.** Instagram
+captions, reels and posts, website copy, offers and announcements are all in
+Hindi. Write natural, spoken Hindi as it is actually used in Abohar — not
+stiff literary or translated-sounding Hindi.
+
+What stays in Roman script inside Hindi copy:
+
+- The salon name: **Shingar Beauty Salon**
+- The phone number, the website (shingar.org) and the address
+- Hashtags — keep these in Roman script, which is how people search
+- Service words that clients themselves say in English (हेयर कलर, ब्राइडल
+  मेकअप, फेशियल) — use the word the client would use, not a forced
+  translation
+
+Replies to clients — DMs, comments, complaints and enquiries — are written in
+**whatever language the client used**. If they message in English, reply in
+English. In Hindi, reply in Hindi. In Punjabi, reply in Punjabi. Never force a
+client to switch language to be understood.
+
+Internal work — briefings, reports, analysis, reviews between agents — stays
+in English.
+
 ## Tone rules
 
 - Address the reader as "you". Refer to the salon as "we".

@@ -32,7 +32,14 @@ export function initHandbook(): void {
   load("startup");
   if (watcher) return;
   try {
-    watcher = fs.watch(HANDBOOK_PATH, () => {
+    // Watch the containing directory, not the file. fs.watch on a single file
+    // binds to its inode, so an editor that saves by writing a temp file and
+    // renaming it over the original leaves the watcher attached to a file that
+    // no longer exists — reloads silently stop after the first save.
+    const dir = path.dirname(HANDBOOK_PATH);
+    const filename = path.basename(HANDBOOK_PATH);
+    watcher = fs.watch(dir, (_event, changed) => {
+      if (changed !== null && changed !== filename) return;
       if (reloadTimer) clearTimeout(reloadTimer);
       reloadTimer = setTimeout(() => load("reload"), 300).unref();
     });
