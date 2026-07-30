@@ -623,13 +623,33 @@ ensureDefaultWorkspace();
 initRegistry();
 initHandbook();
 startScheduler(DEFAULT_WORKSPACE_ID);
-logEvent({ workspaceId: DEFAULT_WORKSPACE_ID, eventType: "server_started", detail: { phase: 9 } });
+logEvent({ workspaceId: DEFAULT_WORKSPACE_ID, eventType: "server_started", detail: { phase: 11 } });
 if (isKillSwitchOn()) {
   console.warn("NOTE: the kill switch is ENGAGED — agents will refuse to run until it is released.");
 }
 
-app.listen(env.PORT, () => {
-  console.log(`AgentCorp (Phase 9) listening on http://localhost:${env.PORT}`);
+/**
+ * Start listening. Exported so the Electron main process can boot the same
+ * server in-process; running this file directly starts it too.
+ * `port: 0` asks the OS for a free port, which the desktop app uses to avoid
+ * clashing with a web instance already on 3000.
+ */
+export function startServer(port: number = env.PORT): Promise<{ port: number; close: () => void }> {
+  return new Promise((resolve, reject) => {
+    const server = app.listen(port, () => {
+      const address = server.address();
+      const actualPort = typeof address === "object" && address !== null ? address.port : port;
+      printRoutes(actualPort);
+      resolve({ port: actualPort, close: () => server.close() });
+    });
+    server.on("error", reject);
+  });
+}
+
+export { app };
+
+function printRoutes(port: number): void {
+  console.log(`AgentCorp listening on http://localhost:${port}`);
   console.log(`  GET  /health`);
   console.log(`  GET  /api/status`);
   console.log(`  GET  /api/agents            list the registry`);
@@ -657,4 +677,13 @@ app.listen(env.PORT, () => {
   console.log(`  GET  /api/tasks/:id/reviews review history for a task`);
   console.log(`  GET  /api/audit             ?limit=&agentId=&eventType=`);
   console.log(`  POST /api/llm/test          { "prompt": "..." }`);
-});
+}
+
+// Auto-start only when this file is the entrypoint, so `require()` from the
+// Electron main process can control startup itself.
+if (require.main === module) {
+  startServer().catch((err: unknown) => {
+    console.error("failed to start server:", err instanceof Error ? err.message : err);
+    process.exit(1);
+  });
+}

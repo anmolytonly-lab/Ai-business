@@ -2,9 +2,9 @@
   "name": "agentcorp",
   "version": "0.1.0",
   "private": true,
-  "description": "AgentCorp — a fully autonomous AI-run business. Phase 1: scaffold, DB schema, LLM provider.",
+  "description": "AgentCorp \u2014 a fully autonomous AI-run business. Phase 1: scaffold, DB schema, LLM provider.",
   "type": "commonjs",
-  "main": "dist/index.js",
+  "main": "desktop/main.js",
   "scripts": {
     "build": "tsc -p tsconfig.json && node -e \"require('fs').cpSync('src/db/migrations','dist/db/migrations',{recursive:true})\"",
     "start": "node dist/index.js",
@@ -22,7 +22,13 @@
     "frontend:dev": "npm --prefix frontend run dev",
     "frontend:build": "npm --prefix frontend run build",
     "build:all": "npm run build && npm run frontend:build",
-    "setup": "npm install && npm run frontend:install && npm run build:all"
+    "setup": "npm install && npm run frontend:install && npm run build:all",
+    "desktop": "npm run build:all && electron desktop/main.js",
+    "desktop:dev": "electron desktop/main.js",
+    "package": "npm run build:all && electron-builder",
+    "package:dir": "npm run build:all && electron-builder --dir",
+    "rebuild:electron": "node -e \"const v=require('electron/package.json').version;const{execSync}=require('child_process');execSync('npm rebuild better-sqlite3 --runtime=electron --target='+v+' --dist-url=https://electronjs.org/headers --build-from-source',{stdio:'inherit'})\"",
+    "rebuild:node": "npm rebuild better-sqlite3"
   },
   "engines": {
     "node": ">=20"
@@ -37,6 +43,60 @@
     "@types/better-sqlite3": "^7.6.12",
     "@types/express": "^4.17.21",
     "@types/node": "^22.10.0",
+    "electron": "^43.2.0",
     "typescript": "^5.7.2"
+  },
+  "build": {
+    "appId": "com.agentcorp.app",
+    "productName": "AgentCorp",
+    "directories": {
+      "output": "release",
+      "buildResources": "desktop/resources"
+    },
+    "files": [
+      "desktop/**/*",
+      "dist/**/*",
+      "frontend/dist/**/*",
+      "package.json",
+      "!**/*.map"
+    ],
+    "extraResources": [
+      {
+        "from": "agents",
+        "to": "app/agents"
+      },
+      {
+        "from": "company_handbook.md",
+        "to": "app/company_handbook.md"
+      },
+      {
+        "from": ".env.example",
+        "to": "app/.env.example"
+      }
+    ],
+    "asarUnpack": [
+      "**/node_modules/better-sqlite3/**",
+      "**/node_modules/sqlite-vec/**"
+    ],
+    "mac": {
+      "category": "public.app-category.business",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Office"
+    }
   }
 }

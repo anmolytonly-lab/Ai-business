@@ -4,8 +4,7 @@ A fully autonomous AI-run business: an AI executive team handles strategy,
 product, marketing, sales, support, finance and reporting. A human owner sets
 goals and approves critical actions; everything else is automated.
 
-**Status: Phase 10 complete** — integration adapters, an agent builder UI, and
-multi-workspace isolation.
+**Status: all 11 phases complete.** Runs in the browser and as a desktop app.
 
 ## Stack
 
@@ -13,7 +12,7 @@ multi-workspace isolation.
 - DB: SQLite (better-sqlite3) with sqlite-vec for knowledge-base vector search
 - LLM: Gemini API through one provider module (`src/llm/provider.ts`)
 - Frontend: React 18 + Vite + Tailwind v4 + shadcn/ui-style components
-- Desktop (Phase 11): Electron wrapper loading the same built frontend
+- Desktop: Electron wrapper in `/desktop` loading the same built frontend
 
 ## Setup
 
@@ -34,6 +33,26 @@ npm start          # API + dashboard at http://localhost:3000
 Open **http://localhost:3000** for the dashboard. The server serves the built
 frontend, so this one command runs the whole product.
 
+### Desktop app
+
+```bash
+npm start              # terminal 1 — the server
+npm run desktop:dev    # terminal 2 — the Electron window
+```
+
+The desktop app **attaches to a server already running on `PORT`**; if none is
+running it boots one in-process on a free port. It is a wrapper around the same
+server and the same UI — there is no desktop-only build, and the web app works
+standalone without Electron.
+
+Running it fully standalone (`npm run desktop`, no server running) needs the
+native SQLite module built for Electron's ABI, which differs from Node's:
+
+```bash
+npm run rebuild:electron   # once, before standalone desktop use
+npm run rebuild:node       # to switch back to running under plain Node
+```
+
 For frontend development with hot reload, run the API and Vite side by side:
 
 ```bash
@@ -43,13 +62,19 @@ npm run frontend:dev   # terminal 2 — UI on :5173, proxies /api to :3000
 
 Other scripts:
 
-```bash
-npm run build      # compile backend TypeScript + copy SQL migrations
-npm run build:all  # backend + frontend
-npm run dev        # build + start the API
-npm run migrate    # apply pending DB migrations and list applied ones
-npm run demo:llm   # Phase 1 demo: one Gemini call (text + validated JSON) with audit rows
-```
+| Script | What it does |
+|---|---|
+| `npm run setup` | Install backend + frontend deps and build both |
+| `npm run build` | Compile the backend and copy SQL migrations |
+| `npm run build:all` | Backend + frontend |
+| `npm start` | Run the API and dashboard |
+| `npm run frontend:dev` | Vite dev server with hot reload on :5173 |
+| `npm run desktop` | Build everything and launch the Electron app |
+| `npm run desktop:dev` | Launch Electron against the current build |
+| `npm run rebuild:electron` / `npm run rebuild:node` | Switch the native SQLite build between runtimes |
+| `npm run package` | Build installers (needs `electron-builder`, see below) |
+| `npm run migrate` | Apply pending migrations and list applied ones |
+| `npm run typecheck` | Type-check without emitting |
 
 `npm run demo:llm "your prompt"` sends a custom prompt.
 `npm run demo:agent [agentId] ["instruction"]` runs one agent end-to-end and
@@ -184,6 +209,48 @@ src/
 workspace/               # agent filesystem sandbox (gitignored)
   index.ts               # Express server
 data/                    # SQLite database (gitignored)
+```
+
+## Desktop app (Phase 11)
+
+`desktop/main.js` is a thin Electron wrapper. It boots the same Express server
+and loads the same built frontend the web app serves — no desktop-only UI, no
+second codebase.
+
+The renderer is locked down: `nodeIntegration: false`, `contextIsolation: true`,
+`sandbox: true`, and navigation confined to the local origin — any other URL
+opens in the user's real browser. A preload bridge exposes only
+`window.agentcorp.isDesktop` and version strings; verified in a running window
+that no Node API leaks into the renderer. A single-instance lock prevents two
+windows racing on the same SQLite file, and the menu exposes the data and
+agents folders.
+
+### The native-module caveat
+
+`better-sqlite3` is a native module, and Electron's ABI differs from Node's
+(148 vs 127 here). Two supported paths:
+
+1. **Attach mode** (no rebuild): run `npm start`, then `npm run desktop:dev`.
+   The app detects the running server and attaches to it.
+2. **Standalone**: `npm run rebuild:electron` once, then `npm run desktop`.
+   Use `npm run rebuild:node` to switch back.
+
+The error dialog names this explicitly if you hit it, rather than showing a
+raw ABI error.
+
+### Packaging
+
+`electron-builder` config for macOS (dmg/zip), Windows (nsis/portable) and
+Linux (AppImage/deb) is in `package.json`, with `better-sqlite3` and
+`sqlite-vec` unpacked from the asar and `agents/` plus the handbook shipped as
+editable resources beside the executable.
+
+`electron-builder` itself is **not installed** — it wasn't in the agreed stack.
+To produce installers:
+
+```bash
+npm i -D electron-builder
+npm run package
 ```
 
 ## Integrations, agent builder & workspaces (Phase 10)
