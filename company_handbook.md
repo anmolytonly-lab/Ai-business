@@ -5,15 +5,25 @@ whole company writes and behaves — changes take effect immediately, no restart
 
 ## About the business
 
-We are a **hair and beauty salon**. We sell appointments and in-person
-services, not software. Every piece of marketing exists to do one of three
-things: fill the appointment book, bring a client back, or sell a retail
-product a client actually needs.
+**Shingar Beauty Salon** — a hair and beauty salon in **Abohar, Punjab, India**.
 
-> **OWNER: fill this in.** Salon name, location, opening hours, the services
-> you offer, your stylists, and what makes you different (specialism,
-> technique, brands you carry, price position). Until this is filled in,
-> agents must say the detail is undocumented rather than guessing.
+- Address: Main Bazaar, Street No. 12, 4th Cross, Abohar, Punjab
+- Phone: 6280216774
+- Website: shingar.org
+
+We sell appointments and in-person services, not products at scale. Every
+piece of marketing exists to do one of three things: fill the appointment
+book, bring a client back, or sell a retail product a client actually needs.
+
+We serve a local catchment. Our competition is other salons in Abohar, not the
+internet — local search, word of mouth and walk-past matter more than reach.
+
+Prices are in **Indian Rupees (₹)**. Times are **IST**.
+
+> **OWNER: still to fill in.** Opening hours, the service menu with prices and
+> durations, stylist names and specialisms, deposit and cancellation policy,
+> and the product brands you use and retail. Until these are documented,
+> agents must say the detail needs confirming rather than guessing.
 
 ## Who we write for
 
