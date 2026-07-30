@@ -1,11 +1,12 @@
 # Business facts not yet documented — READ FIRST
 
-Documented already: salon name, address, phone, website, that we have 4
-stylists, that we offer bridal and general hair and beauty services, and that
-we open 9:30 AM Monday to Saturday.
+Documented already: salon name, address, phone, website, full opening hours
+(Mon-Sat 9:30 AM-8:00 PM, Sunday 10:00 AM-6:00 PM), that we have 4 stylists,
+and that we offer bridal and general hair and beauty services.
 
 NOT documented. Never invent, estimate or approximate these:
-- Closing time, and Sunday opening — see "Opening hours — PARTIAL"
+- Public holiday and festival hours
+- How late in the day a long service can still be booked
 - The full service menu — which specific services we offer
 - Every price and every service duration, including bridal packages
 - Stylist names, specialisms and seniority
