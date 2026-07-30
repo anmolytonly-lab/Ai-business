@@ -6,6 +6,11 @@ import { env } from "./config/env";
 import { getDb, isVecAvailable } from "./db";
 import { generateText } from "./llm/provider";
 import { LlmError } from "./llm/types";
+import {
+  getReviews,
+  listEscalations,
+  resolveEscalation,
+} from "./orchestration/critic";
 import { createGoal, executeGoal, getGoal, listGoals } from "./orchestration/goals";
 import { listTools } from "./tools/registry";
 import { commandWhitelist, workspaceRoot } from "./tools/sandbox";
@@ -30,7 +35,7 @@ app.get("/api/status", (_req, res) => {
     )
     .get() as { usd: number };
   res.json({
-    phase: 4,
+    phase: 5,
     database: env.DATABASE_PATH,
     migrations: migrations.map((m) => m.name),
     vectorSearch: isVecAvailable(),
@@ -123,6 +128,36 @@ app.get("/api/goals/:id", (req, res) => {
   res.json(goal);
 });
 
+// ── Escalations (critic loop ran out of revision rounds) ──────────────
+
+app.get("/api/escalations", (req, res) => {
+  const status = typeof req.query.status === "string" ? req.query.status : "open";
+  res.json(listEscalations(DEFAULT_WORKSPACE_ID, status));
+});
+
+app.post("/api/escalations/:id/resolve", (req, res) => {
+  const status: unknown = req.body?.status;
+  const resolution: unknown = req.body?.resolution;
+  if (status !== "resolved" && status !== "dismissed") {
+    res.status(400).json({ error: 'body must be { "status": "resolved" | "dismissed", "resolution": string }' });
+    return;
+  }
+  const ok = resolveEscalation(
+    req.params.id,
+    status,
+    typeof resolution === "string" ? resolution : ""
+  );
+  if (!ok) {
+    res.status(404).json({ error: `no open escalation "${req.params.id}"` });
+    return;
+  }
+  res.json({ ok: true });
+});
+
+app.get("/api/tasks/:id/reviews", (req, res) => {
+  res.json(getReviews(req.params.id));
+});
+
 // ── Audit log ─────────────────────────────────────────────────────────
 
 app.get("/api/audit", (req, res) => {
@@ -156,10 +191,10 @@ app.post("/api/llm/test", (req, res) => {
 getDb(); // open DB + run migrations before accepting traffic
 ensureDefaultWorkspace();
 initRegistry();
-logEvent({ workspaceId: DEFAULT_WORKSPACE_ID, eventType: "server_started", detail: { phase: 4 } });
+logEvent({ workspaceId: DEFAULT_WORKSPACE_ID, eventType: "server_started", detail: { phase: 5 } });
 
 app.listen(env.PORT, () => {
-  console.log(`AgentCorp (Phase 4) listening on http://localhost:${env.PORT}`);
+  console.log(`AgentCorp (Phase 5) listening on http://localhost:${env.PORT}`);
   console.log(`  GET  /health`);
   console.log(`  GET  /api/status`);
   console.log(`  GET  /api/agents            list the registry`);
@@ -169,6 +204,9 @@ app.listen(env.PORT, () => {
   console.log(`  POST /api/goals             { "description": "..." } -> CEO plans + runs DAG`);
   console.log(`  GET  /api/goals             list goals`);
   console.log(`  GET  /api/goals/:id         goal + its task DAG`);
+  console.log(`  GET  /api/escalations       deliverables needing your decision`);
+  console.log(`  POST /api/escalations/:id/resolve  { "status": "resolved"|"dismissed" }`);
+  console.log(`  GET  /api/tasks/:id/reviews review history for a task`);
   console.log(`  GET  /api/audit             ?limit=&agentId=&eventType=`);
   console.log(`  POST /api/llm/test          { "prompt": "..." }`);
 });

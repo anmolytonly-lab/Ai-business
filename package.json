@@ -14,6 +14,7 @@
     "demo:agent": "npm run build && node dist/scripts/demo-agent.js",
     "demo:goal": "npm run build && node dist/scripts/demo-goal.js",
     "demo:tools": "npm run build && node dist/scripts/demo-tools.js",
+    "demo:critic": "npm run build && node dist/scripts/demo-critic.js",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "engines": {

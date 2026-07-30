@@ -3,9 +3,9 @@
  * independent tasks in parallel (bounded concurrency). A failed task marks
  * its transitive dependents blocked; independent branches keep going.
  */
-import { runAgent } from "../agents/executor";
 import { logEvent } from "../audit";
 import { getDb } from "../db";
+import { produceWithReview } from "./critic";
 import { GoalRow } from "./planner";
 
 const CONCURRENCY = 3;
@@ -34,6 +34,7 @@ export interface GoalReport {
   completed: number;
   failed: number;
   blocked: number;
+  escalated: number;
   totalCostUsd: number;
   report: string;
 }
@@ -92,11 +93,15 @@ export async function runGoal(goalId: string): Promise<GoalReport> {
     status.get(t.id) === "pending" &&
     (deps.get(t.id) ?? []).every((d) => status.get(d) === "completed");
 
-  /** A pending task is doomed if any transitive dependency failed/blocked. */
+  /**
+   * A pending task is doomed if any transitive dependency failed, was blocked,
+   * or was escalated — downstream work must never be built on a deliverable
+   * that is still waiting on a human decision.
+   */
   const isDoomed = (t: TaskRow): boolean =>
     (deps.get(t.id) ?? []).some((d) => {
       const s = status.get(d);
-      if (s === "failed" || s === "blocked") return true;
+      if (s === "failed" || s === "blocked" || s === "escalated") return true;
       const depTask = byId.get(d);
       return depTask !== undefined && s === "pending" && isDoomed(depTask);
     });
@@ -108,13 +113,21 @@ export async function runGoal(goalId: string): Promise<GoalReport> {
       agentId: byId.get(d)?.agent_id ?? "unknown",
       output: outputs.get(d) ?? "",
     }));
-    const promise = runAgent(t.agent_id, buildTaskPrompt(t, depOutputs), {
-      workspaceId: t.workspace_id,
+    // Every deliverable goes through the critic loop before it counts as done.
+    const promise = produceWithReview({
       taskId: t.id,
+      goalId: t.goal_id,
+      workspaceId: t.workspace_id,
+      producerId: t.agent_id,
+      instruction: t.instruction,
+      acceptanceCriteria: t.acceptance_criteria ?? "",
+      basePrompt: buildTaskPrompt(t, depOutputs),
     })
       .then((res) => {
+        // Escalated work is still passed downstream — it exists, it just
+        // needs a human decision, which is recorded in the escalations table.
         outputs.set(t.id, res.output);
-        setStatus(t.id, "completed", res.output);
+        setStatus(t.id, res.status === "escalated" ? "escalated" : "completed", res.output);
       })
       .catch((err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);
@@ -141,11 +154,12 @@ export async function runGoal(goalId: string): Promise<GoalReport> {
     await Promise.race(inFlight.values());
   }
 
-  const counts = { completed: 0, failed: 0, blocked: 0, other: 0 };
+  const counts = { completed: 0, failed: 0, blocked: 0, escalated: 0, other: 0 };
   for (const s of status.values()) {
     if (s === "completed") counts.completed++;
     else if (s === "failed") counts.failed++;
     else if (s === "blocked") counts.blocked++;
+    else if (s === "escalated") counts.escalated++;
     else counts.other++;
   }
 
@@ -156,17 +170,31 @@ export async function runGoal(goalId: string): Promise<GoalReport> {
     .get(goalId) as { usd: number };
 
   const finalStatus: GoalReport["status"] =
-    counts.failed === 0 && counts.blocked === 0 && counts.other === 0 ? "completed" : "failed";
+    counts.failed === 0 && counts.blocked === 0 && counts.escalated === 0 && counts.other === 0
+      ? "completed"
+      : "failed";
+
+  const reviewStats = db
+    .prepare(
+      `SELECT COUNT(*) AS total, SUM(verdict = 'REVISE') AS revisions
+       FROM reviews WHERE task_id IN (SELECT id FROM tasks WHERE goal_id = ?)`
+    )
+    .get(goalId) as { total: number; revisions: number | null };
 
   const lines = [
     `Goal ${finalStatus.toUpperCase()}: ${goal.description}`,
     `Tasks: ${counts.completed}/${tasks.length} completed` +
       (counts.failed > 0 ? `, ${counts.failed} failed` : "") +
-      (counts.blocked > 0 ? `, ${counts.blocked} blocked` : ""),
+      (counts.blocked > 0 ? `, ${counts.blocked} blocked` : "") +
+      (counts.escalated > 0 ? `, ${counts.escalated} escalated to you` : ""),
+    `Reviews: ${reviewStats.total} (${reviewStats.revisions ?? 0} sent back for revision)`,
     `Total LLM cost: $${cost.usd.toFixed(4)}`,
     "",
     ...tasks.map((t) => `- [${status.get(t.id)}] ${t.id} (${t.agent_id}): ${t.instruction.slice(0, 100)}`),
   ];
+  if (counts.escalated > 0) {
+    lines.push("", `${counts.escalated} deliverable(s) need your decision — see GET /api/escalations`);
+  }
   const report = lines.join("\n");
 
   db.prepare(
@@ -185,6 +213,7 @@ export async function runGoal(goalId: string): Promise<GoalReport> {
     completed: counts.completed,
     failed: counts.failed,
     blocked: counts.blocked,
+    escalated: counts.escalated,
     totalCostUsd: cost.usd,
     report,
   };

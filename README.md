@@ -4,9 +4,8 @@ A fully autonomous AI-run business: an AI executive team handles strategy,
 product, marketing, sales, support, finance and reporting. A human owner sets
 goals and approves critical actions; everything else is automated.
 
-**Status: Phase 4 complete** — agents can use tools, with per-agent
-permissions, a `/workspace`-only filesystem sandbox and a shell command
-whitelist.
+**Status: Phase 5 complete** — every deliverable is reviewed against its
+acceptance criteria, revised up to twice, then escalated to the human.
 
 ## Stack
 
@@ -43,6 +42,8 @@ prints its audit trail (defaults to `seo_writer`).
 plan → DAG execution → report.
 `npm run demo:tools` shows an agent writing and running a file in the
 sandbox, and an agent being refused a tool it wasn't granted.
+`npm run demo:critic` runs deliverables through the reviewer and prints each
+round's verdict.
 
 ### Endpoints
 
@@ -57,6 +58,9 @@ sandbox, and an agent being refused a tool it wasn't granted.
 | `POST /api/goals` `{ "description": "..." }` | Set a goal; CEO plans and runs it (202, then poll) |
 | `GET /api/goals` | All goals with status and final report |
 | `GET /api/goals/:id` | One goal plus its full task DAG |
+| `GET /api/escalations` `?status=open` | Deliverables that need your decision |
+| `POST /api/escalations/:id/resolve` | `{ "status": "resolved"\|"dismissed", "resolution": "..." }` |
+| `GET /api/tasks/:id/reviews` | Full review history for a task |
 | `GET /api/audit` `?limit=&agentId=&eventType=` | Audit trail |
 | `POST /api/llm/test` `{ "prompt": "..." }` | Raw provider call (Phase 1) |
 
@@ -97,6 +101,7 @@ src/
   audit.ts               # audit_log write/read helpers
   orchestration/planner.ts  # CEO goal -> validated task DAG + hard caps
   orchestration/runner.ts   # TaskRunner: dependency-aware parallel execution
+  orchestration/critic.ts   # reviewer routing, revision rounds, escalation
   orchestration/goals.ts    # create/execute/read goals
   tools/sandbox.ts       # workspace path resolution + command whitelist
   tools/registry.ts      # tool registry + permission enforcement + audit
@@ -115,6 +120,51 @@ workspace/               # agent filesystem sandbox (gitignored)
   index.ts               # Express server
 data/                    # SQLite database (gitignored)
 ```
+
+## Critic loop (Phase 5)
+
+No deliverable is accepted on the producing agent's own say-so. Every task
+output goes to a reviewer agent, which judges it **only** against the task and
+its `acceptanceCriteria` and returns a zod-validated verdict:
+
+```json
+{ "verdict": "APPROVE" | "REVISE", "feedback": "...", "requiredChanges": ["..."] }
+```
+
+### Reviewer routing
+
+| Producer's department | Reviewer |
+|---|---|
+| product (developer, devops, qa_tester, ui_designer) | `code_reviewer` |
+| marketing (seo_writer, instagram_agent, …) | `creative_director` |
+| executive, sales, ops | `coo` |
+
+An agent never reviews its own work: `code_reviewer` and `creative_director`
+fall back to `coo` for their own deliverables, and the `coo` falls back to the
+`ceo`. Pass `reviewerId` to `produceWithReview()` to override the routing.
+
+### Revision and escalation
+
+On `REVISE` the producing agent is re-run with the critique and its previous
+attempt, and must address every required change. After **2 revision rounds**
+(3 production attempts total) the task is marked `escalated`, an `escalations`
+row is created with the deliverable and the last critique, and it waits for a
+human at `GET /api/escalations`.
+
+Escalated work does **not** flow downstream: dependent tasks are blocked
+rather than built on a deliverable that hasn't passed review. A reviewer that
+errors out escalates too — a broken critic never silently passes work through.
+
+Every round is persisted to `reviews` (verdict, feedback, required changes,
+and the exact deliverable judged) and audited as `review_approved`,
+`review_revise_requested`, `task_escalated` or `escalation_resolved`.
+
+Observed on a real run: a 4-task Instagram goal produced 6 reviews, 2 of which
+were sent back. The `coo` caught the `creative_director` returning a bare
+"APPROVE" with no caption and no justification — both were fixed within the
+allowed rounds. The escalation path itself is covered by 23 tests using an
+always-REVISE reviewer fixture, verifying it stops at exactly 2 rounds,
+records 3 reviews, blocks dependents, and rejects double-resolution.
 
 ## Tools & sandbox (Phase 4)
 
@@ -218,6 +268,8 @@ Tables created by `001_init.sql`, sized for the phases ahead:
   `depends_on`, status and result
 - `llm_calls` — every LLM call: prompts, tokens, estimated cost, latency, errors
 - `audit_log` — tool calls, approvals, config changes (Phase 2+)
+- `reviews` — every critic verdict with feedback and the deliverable judged
+- `escalations` — work that failed review twice, awaiting a human decision
 - `approvals` — human approval queue (Phase 7)
 - `documents` — Company Brain source docs (Phase 6 adds chunking + embeddings)
 - `agent_memory` — per-agent episodic memory (Phase 9 adds compaction)
@@ -237,7 +289,7 @@ Tables created by `001_init.sql`, sized for the phases ahead:
 2. ✅ Agent registry (`/agents/*.json`) + single-agent execution + full audit logging
 3. ✅ CEO orchestration, task DAG, TaskRunner with dependencies
 4. ✅ Tool system with per-agent permissions + sandbox
-5. Critic loop + revision rounds + escalation
+5. ✅ Critic loop + revision rounds + escalation
 6. Company Brain (embeddings, retrieval, handbook injection)
 7. Human approval queue + budget guard + kill switch
 8. React frontend: chat, org chart, task board, approval inbox, audit log
