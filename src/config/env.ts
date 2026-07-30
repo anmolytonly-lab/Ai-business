@@ -43,6 +43,11 @@ const envSchema = z.object({
   EMBEDDING_DIMENSIONS: z.coerce.number().int().positive().default(768),
   /** Chunks retrieved and injected into an agent's prompt before it answers. */
   BRAIN_TOP_K: z.coerce.number().int().positive().default(4),
+  /** Autonomous routines. Off by default so nothing runs unattended unasked. */
+  SCHEDULER_ENABLED: z
+    .string()
+    .default("false")
+    .transform((v) => v === "true" || v === "1"),
 });
 
 export type Env = z.infer<typeof envSchema>;

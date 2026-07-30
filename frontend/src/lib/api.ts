@@ -130,8 +130,56 @@ export interface Document {
   created_at: string;
 }
 
+export interface Kpi {
+  key: string;
+  label: string;
+  value: number | null;
+  unit: "count" | "usd";
+  connected: boolean;
+  hint?: string;
+  previous?: number | null;
+}
+
+export interface KpiSnapshot {
+  generatedAt: string;
+  periodDays: number;
+  kpis: Kpi[];
+  spendByDay: { date: string; usd: number }[];
+  tasksByStatus: { status: string; count: number }[];
+  topAgents: { agentId: string; runs: number; costUsd: number }[];
+}
+
+export interface RoutineRun {
+  id: number;
+  routine_id: string;
+  status: string;
+  trigger: string;
+  summary: string | null;
+  error: string | null;
+  cost_usd: number;
+  started_at: string;
+  finished_at: string | null;
+}
+
+export interface Routine {
+  id: string;
+  name: string;
+  description: string;
+  cron: string;
+  enabled: boolean;
+  nextRun: string | null;
+  lastRun: RoutineRun | null;
+}
+
 export const api = {
   status: () => request<Status>("/status"),
+  kpis: (days = 7) => request<KpiSnapshot>(`/kpis?days=${days}`),
+  routines: () => request<Routine[]>("/routines"),
+  routineRuns: () => request<RoutineRun[]>("/routines/runs"),
+  runRoutine: (id: string) =>
+    request<{ runId: number; status: string; summary: string }>(`/routines/${id}/run`, {
+      method: "POST",
+    }),
   agents: () => request<Agent[]>("/agents"),
   agentStatuses: () => request<AgentStatus[]>("/agents/status"),
   goals: () => request<Goal[]>("/goals"),

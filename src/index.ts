@@ -7,7 +7,15 @@ import { listAgentStatuses } from "./agents/status";
 import { ChatTurn, chatWithCeo } from "./chat";
 import { decideApproval, getApproval, listApprovals } from "./approvals";
 import { getAuditLog, logEvent } from "./audit";
+import { getKpis } from "./kpis";
+import { listMemory } from "./memory";
 import { getSpendSnapshot } from "./safety/budget";
+import {
+  listRoutineRuns,
+  listRoutines,
+  startScheduler,
+  triggerRoutine,
+} from "./scheduler";
 import { isKillSwitchOn, setKillSwitch } from "./safety/killswitch";
 import {
   addDocument,
@@ -64,7 +72,7 @@ app.get("/api/status", (_req, res) => {
     )
     .get() as { usd: number };
   res.json({
-    phase: 7,
+    phase: 9,
     database: env.DATABASE_PATH,
     migrations: migrations.map((m) => m.name),
     vectorSearch: isVecAvailable(),
@@ -130,6 +138,40 @@ app.post("/api/agents/:id/run", (req, res) => {
       const status = message.startsWith("unknown agent") ? 404 : 502;
       res.status(status).json({ error: message });
     });
+});
+
+// ── Dashboard KPIs, scheduler & memory ────────────────────────────────
+
+app.get("/api/kpis", (req, res) => {
+  const days = typeof req.query.days === "string" ? Number(req.query.days) : 7;
+  res.json(getKpis(DEFAULT_WORKSPACE_ID, Number.isFinite(days) && days > 0 ? days : 7));
+});
+
+app.get("/api/routines", (_req, res) => {
+  res.json(listRoutines());
+});
+
+app.get("/api/routines/runs", (_req, res) => {
+  res.json(listRoutineRuns());
+});
+
+/** Fire a routine now, outside its schedule. */
+app.post("/api/routines/:id/run", (req, res) => {
+  triggerRoutine(req.params.id, DEFAULT_WORKSPACE_ID)
+    .then((result) => res.json(result))
+    .catch((err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      res.status(message.startsWith("unknown routine") ? 404 : 409).json({ error: message });
+    });
+});
+
+app.get("/api/memory", (req, res) => {
+  res.json(
+    listMemory(
+      DEFAULT_WORKSPACE_ID,
+      typeof req.query.agentId === "string" ? req.query.agentId : undefined
+    )
+  );
 });
 
 // ── Chat with the CEO ─────────────────────────────────────────────────
@@ -405,18 +447,22 @@ getDb(); // open DB + run migrations before accepting traffic
 ensureDefaultWorkspace();
 initRegistry();
 initHandbook();
-logEvent({ workspaceId: DEFAULT_WORKSPACE_ID, eventType: "server_started", detail: { phase: 7 } });
+startScheduler(DEFAULT_WORKSPACE_ID);
+logEvent({ workspaceId: DEFAULT_WORKSPACE_ID, eventType: "server_started", detail: { phase: 9 } });
 if (isKillSwitchOn()) {
   console.warn("NOTE: the kill switch is ENGAGED — agents will refuse to run until it is released.");
 }
 
 app.listen(env.PORT, () => {
-  console.log(`AgentCorp (Phase 7) listening on http://localhost:${env.PORT}`);
+  console.log(`AgentCorp (Phase 9) listening on http://localhost:${env.PORT}`);
   console.log(`  GET  /health`);
   console.log(`  GET  /api/status`);
   console.log(`  GET  /api/agents            list the registry`);
   console.log(`  GET  /api/agents/:id        full agent config`);
   console.log(`  POST /api/agents/:id/run    { "instruction": "..." }`);
+  console.log(`  GET  /api/kpis              dashboard KPIs (?days=7)`);
+  console.log(`  GET  /api/routines          scheduled routines + next run`);
+  console.log(`  POST /api/routines/:id/run  fire a routine now`);
   console.log(`  GET  /api/approvals         pending outbound actions`);
   console.log(`  POST /api/approvals/:id/decide  { "decision": "approved"|"rejected" }`);
   console.log(`  GET  /api/budget            spend vs caps, per agent`);

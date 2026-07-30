@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import {
+  Gauge,
   Inbox,
   LayoutGrid,
   MessageSquare,
@@ -13,12 +14,14 @@ import { cn, money } from "@/lib/utils";
 import { Approvals } from "@/views/Approvals";
 import { AuditLog } from "@/views/AuditLog";
 import { Chat } from "@/views/Chat";
+import { Dashboard } from "@/views/Dashboard";
 import { OrgChart } from "@/views/OrgChart";
 import { TaskBoard } from "@/views/TaskBoard";
 
-type Tab = "chat" | "org" | "tasks" | "approvals" | "audit";
+type Tab = "dashboard" | "chat" | "org" | "tasks" | "approvals" | "audit";
 
 const TABS: { key: Tab; label: string; icon: React.ReactNode }[] = [
+  { key: "dashboard", label: "Dashboard", icon: <Gauge size={15} /> },
   { key: "chat", label: "Chat", icon: <MessageSquare size={15} /> },
   { key: "org", label: "Org chart", icon: <Network size={15} /> },
   { key: "tasks", label: "Tasks", icon: <LayoutGrid size={15} /> },
@@ -27,7 +30,7 @@ const TABS: { key: Tab; label: string; icon: React.ReactNode }[] = [
 ];
 
 export default function App() {
-  const [tab, setTab] = useState<Tab>("chat");
+  const [tab, setTab] = useState<Tab>("dashboard");
   const [status, setStatus] = useState<Status | null>(null);
   const [budget, setBudget] = useState<Budget | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
@@ -148,6 +151,11 @@ export default function App() {
       )}
 
       <main className="min-h-0 flex-1 overflow-hidden">
+        {tab === "dashboard" && (
+          <div className="h-full overflow-y-auto">
+            <Dashboard />
+          </div>
+        )}
         {tab === "chat" && <Chat onGoalCreated={refresh} />}
         {tab === "org" && (
           <div className="h-full overflow-y-auto">

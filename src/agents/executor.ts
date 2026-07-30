@@ -10,6 +10,7 @@ import { formatContext, search } from "../brain";
 import { withHandbook } from "../brain/handbook";
 import { generateStep, generateText } from "../llm/provider";
 import { GeminiContent, LlmUsage } from "../llm/types";
+import { recallForAgent } from "../memory";
 import { callTool, declarationsForAgent } from "../tools/registry";
 import { getAgent } from "./registry";
 import { setAgentStatus } from "./status";
@@ -90,7 +91,8 @@ export async function runAgent(
     });
   }
 
-  const prompt = contextBlock === "" ? instruction : `${contextBlock}\n\n---\n\n${instruction}`;
+  const memory = recallForAgent(workspaceId, agent.id);
+  const prompt = [contextBlock, memory, instruction].filter((p) => p !== "").join("\n\n---\n\n");
 
   const llmOpts = {
     systemPrompt: withHandbook(agent.systemPrompt),

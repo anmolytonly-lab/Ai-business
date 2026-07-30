@@ -14,6 +14,7 @@ import { logEvent } from "../audit";
 import { getDb } from "../db";
 import { generateJson } from "../llm/provider";
 import { LlmUsage } from "../llm/types";
+import { recordEpisode } from "../memory";
 
 /** Spec: max 2 revision rounds, then escalate. */
 export const MAX_REVISION_ROUNDS = 2;
@@ -293,6 +294,13 @@ export async function produceWithReview(opts: {
     reviews.push({ ...verdict, reviewerId, round });
 
     if (verdict.verdict === "APPROVE") {
+      recordEpisode(
+        workspaceId,
+        producerId,
+        `Task: ${instruction.slice(0, 200)} — approved by ${reviewerId}` +
+          (round > 0 ? ` after ${round} revision round(s)` : " first time") +
+          `. ${round > 0 && lastCritique !== "" ? `Earlier critique: ${lastCritique.slice(0, 200)}` : ""}`
+      );
       return { output: deliverable, status: "completed", rounds: round, reviews, usage };
     }
 
@@ -313,6 +321,12 @@ export async function produceWithReview(opts: {
       last?.feedback ?? "(none)"
     }`,
     deliverable
+  );
+  recordEpisode(
+    workspaceId,
+    producerId,
+    `Task: ${instruction.slice(0, 200)} — ESCALATED after failing ${MAX_REVISION_ROUNDS} ` +
+      `revision rounds with ${reviewerId}. Critique: ${last?.feedback.slice(0, 250) ?? "none"}`
   );
   return {
     output: deliverable,

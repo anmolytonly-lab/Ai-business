@@ -4,8 +4,8 @@ A fully autonomous AI-run business: an AI executive team handles strategy,
 product, marketing, sales, support, finance and reporting. A human owner sets
 goals and approves critical actions; everything else is automated.
 
-**Status: Phase 8 complete** — a React dashboard with CEO chat, live org
-chart, task board, approval inbox and audit log.
+**Status: Phase 9 complete** — the company runs itself on a schedule, with a
+KPI dashboard over the results.
 
 ## Stack
 
@@ -84,6 +84,10 @@ halting an agent mid-flight, and the budget snapshot.
 | `DELETE /api/documents/:id` | Remove a document and its vectors |
 | `POST /api/brain/search` `{ "query": "..." }` | Semantic search with scores |
 | `GET /api/handbook` | The company handbook text |
+| `GET /api/kpis` `?days=7` | Dashboard KPIs, spend series, task/agent breakdowns |
+| `GET /api/routines` | Routines with next run and last result |
+| `POST /api/routines/:id/run` | Fire a routine now, outside its schedule |
+| `GET /api/memory` `?agentId=` | Episodic memory and summaries |
 | `POST /api/chat` `{ "message", "history" }` | Talk to the CEO; flags goals |
 | `GET /api/agents/status` | Live per-agent activity for the org chart |
 | `GET /api/tools` | Available tools, sandbox root, shell whitelist |
@@ -130,7 +134,7 @@ company_handbook.md      # brand voice + forbidden claims, injected everywhere
 frontend/                # React + Vite + Tailwind dashboard
   src/lib/api.ts         # typed API client
   src/components/ui/     # shadcn/ui-style primitives
-  src/views/             # Chat, OrgChart, TaskBoard, Approvals, AuditLog
+  src/views/             # Dashboard, Chat, OrgChart, TaskBoard, Approvals, AuditLog
 src/
   agents/schema.ts       # zod schema for agent config files
   agents/registry.ts     # load + validate + hot-reload the registry
@@ -139,6 +143,11 @@ src/
   orchestration/planner.ts  # CEO goal -> validated task DAG + hard caps
   orchestration/runner.ts   # TaskRunner: dependency-aware parallel execution
   chat.ts                # owner <-> CEO conversation
+  kpis.ts                # dashboard metrics (honest about unconnected sources)
+  memory.ts              # episodic memory + scheduled compaction
+  scheduler/cron.ts      # 5-field cron parser (no dependency)
+  scheduler/routines.ts  # the six autonomous routines
+  scheduler/index.ts     # tick loop, kill-switch aware, manual triggers
   agents/status.ts       # live per-agent activity
   approvals/index.ts     # approval queue + legal_compliance gate
   safety/budget.ts       # daily and per-agent spend caps, 80% alert
@@ -165,6 +174,56 @@ workspace/               # agent filesystem sandbox (gitignored)
   index.ts               # Express server
 data/                    # SQLite database (gitignored)
 ```
+
+## Scheduler, routines & KPIs (Phase 9)
+
+### Autonomous routines
+
+Six routines run the company without you. The scheduler is a hand-rolled
+5-field cron parser (no dependency) ticking every 30s:
+
+| Routine | Schedule | What it does |
+|---|---|---|
+| `daily_standup` | `0 9 * * *` | Chief of Staff writes the morning brief |
+| `daily_content` | `0 10 * * 1-5` | CMO plans and the content team produces the day's assets |
+| `weekly_metrics` | `0 9 * * 1` | Analyst reports the week's numbers and the insight behind them |
+| `weekly_hr_review` | `0 16 * * 5` | HR reviewer scores agents and proposes prompt improvements |
+| `monthly_pnl` | `0 8 1 * *` | Bookkeeper produces the monthly P&L |
+| `memory_compaction` | `30 3 * * *` | Folds old agent episodes into durable summaries |
+
+**The scheduler is off by default** (`SCHEDULER_ENABLED=false`) so nothing
+runs unattended until you choose it. Every routine can be fired by hand from
+the dashboard regardless. Routines are skipped (and recorded as `skipped`)
+while the kill switch is engaged, never queued up to stampede on release, and
+a routine already running is never started twice. Written briefings are filed
+back into the Company Brain so future agents can retrieve them.
+
+The cron parser supports `*`, numbers, `a-b` ranges, `a,b` lists and `*/n`
+steps, with standard OR semantics when both day-of-month and day-of-week are
+restricted. Covered by 40 tests including weekday correctness, month
+boundaries, next-run calculation and rejection of malformed expressions.
+
+### Memory (spec item 9)
+
+Two layers: **episodic** — after every review an episode records what the
+agent did, whether it passed first time, and any critique — and **semantic**,
+the shared Company Brain. Agents recall their own history before working.
+When an agent exceeds 20 episodes, compaction folds all but the 5 most recent
+into a single durable summary, so context never grows without bound.
+
+### Dashboard KPIs
+
+Stat tiles for content shipped, tasks completed, goals completed, AI spend and
+items awaiting you — each with a delta against the previous period — plus
+daily spend over 14 days, tasks by status and spend by agent.
+
+**Revenue and Leads report "Not connected" rather than 0.** There is no
+payment or CRM integration until Phase 10, and a zero would read as "no
+revenue" instead of "no data source".
+
+Charts follow a single-hue sequential scheme (one series each, magnitude by
+length), validated against the app's dark surface with the dataviz palette
+validator: lightness band, chroma floor and contrast all pass.
 
 ## Dashboard (Phase 8)
 
@@ -475,6 +534,6 @@ Tables created by `001_init.sql`, sized for the phases ahead:
 6. ✅ Company Brain (embeddings, retrieval, handbook injection)
 7. ✅ Human approval queue + budget guard + kill switch
 8. ✅ React frontend: chat, org chart, task board, approval inbox, audit log
-9. Scheduler + autonomous routines + dashboard KPIs
+9. ✅ Scheduler + autonomous routines + dashboard KPIs
 10. Integrations adapters (stubs), agent builder UI, workspaces
 11. Electron packaging + build scripts
