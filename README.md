@@ -4,8 +4,9 @@ A fully autonomous AI-run business: an AI executive team handles strategy,
 product, marketing, sales, support, finance and reporting. A human owner sets
 goals and approves critical actions; everything else is automated.
 
-**Status: Phase 6 complete** — a vector-backed Company Brain grounds every
-agent answer, and the company handbook binds every agent prompt.
+**Status: Phase 7 complete** — outbound actions are gated behind a human
+approval queue with a legal-compliance pass, spend is capped per task, per
+agent and per day, and a kill switch halts everything instantly.
 
 ## Stack
 
@@ -46,6 +47,8 @@ sandbox, and an agent being refused a tool it wasn't granted.
 round's verdict.
 `npm run demo:brain` seeds the knowledge base, runs semantic search, and shows
 a grounded answer, a refusal on undocumented facts, and handbook enforcement.
+`npm run demo:safety` shows the legal gate, an approval card, the kill switch
+halting an agent mid-flight, and the budget snapshot.
 
 ### Endpoints
 
@@ -56,6 +59,10 @@ a grounded answer, a refusal on undocumented facts, and handbook enforcement.
 | `GET /api/agents` | Registry summary (id, department, reporting line, tools) |
 | `GET /api/agents/:id` | Full agent config including system prompt |
 | `POST /api/agents/:id/run` `{ "instruction": "..." }` | Execute one agent, fully audited |
+| `GET /api/approvals` `?status=pending` | Outbound actions awaiting your click |
+| `POST /api/approvals/:id/decide` | `{ "decision": "approved"\|"rejected", "note"?: string }` |
+| `GET /api/budget` | Spend vs daily and per-agent caps, broken down by agent |
+| `GET /api/kill-switch` / `POST /api/kill-switch` | Read or set `{ "engaged": boolean }` |
 | `POST /api/documents` `{ "title", "content" }` | Add a document to the Company Brain |
 | `GET /api/documents` | List documents (source, review status, chunk count) |
 | `POST /api/documents/:id/approve` | Approve an agent-written learning |
@@ -109,6 +116,9 @@ src/
   audit.ts               # audit_log write/read helpers
   orchestration/planner.ts  # CEO goal -> validated task DAG + hard caps
   orchestration/runner.ts   # TaskRunner: dependency-aware parallel execution
+  approvals/index.ts     # approval queue + legal_compliance gate
+  safety/budget.ts       # daily and per-agent spend caps, 80% alert
+  safety/killswitch.ts   # global halt, checked before every model and tool call
   brain/index.ts         # Company Brain: index, retrieve, learnings, approval
   brain/chunker.ts       # paragraph-aware chunking
   brain/handbook.ts      # company_handbook.md injection + hot-reload
@@ -131,6 +141,63 @@ workspace/               # agent filesystem sandbox (gitignored)
   index.ts               # Express server
 data/                    # SQLite database (gitignored)
 ```
+
+## Approvals, budget & kill switch (Phase 7)
+
+### Human approval queue
+
+An agent's `requiresApproval[]` declares which outbound actions it may never
+perform on its own — `publish`, `send_email`, `send_dm`, `deploy`, `spend`,
+`legal_text`. When such an agent's deliverable passes review, the system
+**does not act**: it creates a pending approval card and stops.
+
+The task itself is complete — the card gates the *external* action, which
+does not exist until the Phase 10 adapters. Approving records the decision; it
+does not yet transmit anything anywhere.
+
+### Legal compliance gate
+
+Before any card is created, `legal_compliance` reviews the content against the
+handbook and returns `{ risky, flags[], assessment }`, which is attached to the
+card so you see the risks before you click.
+
+The gate **fails closed**: if the compliance check errors, times out or is
+blocked, the result is `risky: true` with the failure as a flag — a broken
+check never looks like a clean bill of health. This was confirmed in a live
+run when Gemini returned a 503 and the card was correctly flagged rather than
+passed.
+
+Real flags raised on a promotional-email goal: "Zero Risk" as a guaranteed
+outcome, "Seamless Automation" as a handbook-forbidden hype word, and missing
+disclaimers where only a placeholder existed.
+
+### Budget guard
+
+| Scope | Limit | Behaviour |
+|---|---|---|
+| Per task | agent's `maxCostPerTask` | Tool loop stops mid-run when exceeded |
+| Per agent per day | `AGENT_DAILY_BUDGET_USD` | That agent stops for the day |
+| Company per day | `DAILY_BUDGET_USD` | **Alert at 80%**, hard stop at 100% |
+
+Set either daily cap to `0` to disable it. The 80% alert fires once per day
+(tracked in `system_state`), logs a `budget_alert` event, and is surfaced by
+`GET /api/budget`.
+
+### Kill switch
+
+`POST /api/kill-switch {"engaged": true}` halts everything instantly. It is
+checked in the provider before **every** model call and embedding, and in the
+tool registry before **every** tool call — so no code path reaches an external
+system while it is on. State lives in the database, so it survives a restart;
+the server warns at boot if it is still engaged.
+
+Both guards sit at the single choke point in `src/llm/provider.ts`, which is
+why nothing can bypass them.
+
+Covered by 33 tests: daily and per-agent hard stops, once-per-day alerting,
+`0` disabling a cap, kill switch blocking both model and tool calls, approval
+lifecycle and double-decide rejection, gated-action mapping per agent, and the
+legal gate failing closed.
 
 ## Company Brain & handbook (Phase 6)
 
@@ -326,7 +393,8 @@ Tables created by `001_init.sql`, sized for the phases ahead:
 - `audit_log` — tool calls, approvals, config changes (Phase 2+)
 - `reviews` — every critic verdict with feedback and the deliverable judged
 - `escalations` — work that failed review twice, awaiting a human decision
-- `approvals` — human approval queue (Phase 7)
+- `approvals` — pending outbound actions with their legal review
+- `system_state` — kill switch and once-per-day budget alert markers
 - `documents` / `document_chunks` / `vec_chunks` — Company Brain: source docs,
   their chunks, and the sqlite-vec embedding index
 - `agent_memory` — per-agent episodic memory (Phase 9 adds compaction)
@@ -348,7 +416,7 @@ Tables created by `001_init.sql`, sized for the phases ahead:
 4. ✅ Tool system with per-agent permissions + sandbox
 5. ✅ Critic loop + revision rounds + escalation
 6. ✅ Company Brain (embeddings, retrieval, handbook injection)
-7. Human approval queue + budget guard + kill switch
+7. ✅ Human approval queue + budget guard + kill switch
 8. React frontend: chat, org chart, task board, approval inbox, audit log
 9. Scheduler + autonomous routines + dashboard KPIs
 10. Integrations adapters (stubs), agent builder UI, workspaces

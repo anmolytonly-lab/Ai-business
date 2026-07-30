@@ -6,6 +6,8 @@
 import { z } from "zod";
 import { env, requireGeminiKey } from "../config/env";
 import { getDb } from "../db";
+import { assertWithinBudget } from "../safety/budget";
+import { assertNotKilled } from "../safety/killswitch";
 import {
   ChatMessage,
   GenerateOptions,
@@ -104,6 +106,11 @@ async function callGemini(
   opts: GenerateOptions,
   tools?: ToolDeclaration[]
 ): Promise<LlmStepResult> {
+  // Single choke point for safety: nothing reaches the model with the kill
+  // switch engaged or a spend cap already met.
+  assertNotKilled();
+  assertWithinBudget(opts.agentId);
+
   const apiKey = requireGeminiKey();
   const model = opts.model ?? env.GEMINI_MODEL;
   const url = `${API_BASE}/models/${model}:generateContent`;
@@ -280,6 +287,9 @@ export async function embedText(
   text: string,
   taskType: "RETRIEVAL_DOCUMENT" | "RETRIEVAL_QUERY" = "RETRIEVAL_DOCUMENT"
 ): Promise<number[]> {
+  assertNotKilled();
+  assertWithinBudget();
+
   const apiKey = requireGeminiKey();
   const model = env.GEMINI_EMBEDDING_MODEL;
   const url = `${API_BASE}/models/${model}:embedContent`;

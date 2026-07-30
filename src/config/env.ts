@@ -32,6 +32,8 @@ const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(3000),
   DATABASE_PATH: z.string().default("./data/agentcorp.db"),
   DAILY_BUDGET_USD: z.coerce.number().nonnegative().default(5),
+  /** Per-agent daily cap. 0 disables it. */
+  AGENT_DAILY_BUDGET_USD: z.coerce.number().nonnegative().default(2),
   /** Filesystem sandbox root — agents can never read or write outside this. */
   AGENT_WORKSPACE_ROOT: z.string().default("./workspace"),
   /** Extra whitelisted shell commands, comma-separated. Empty by default. */

@@ -5,6 +5,7 @@
  */
 import { getAgent } from "../agents/registry";
 import { logEvent } from "../audit";
+import { isKillSwitchOn } from "../safety/killswitch";
 import { SandboxViolation } from "./sandbox";
 import { dbQueryTool } from "./impl/db";
 import { fileListTool, fileReadTool, fileWriteTool } from "./impl/files";
@@ -88,6 +89,15 @@ export async function callTool(
     agentId: ctx.agentId,
     ...(ctx.taskId !== undefined ? { taskId: ctx.taskId } : {}),
   };
+
+  // The kill switch halts tool use too, not just model calls.
+  if (isKillSwitchOn()) {
+    logEvent({ ...audit, eventType: "tool_call_rejected", detail: { toolName, reason: "kill switch" } });
+    return {
+      result: "ERROR: kill switch is engaged — all agent activity is halted.",
+      ok: false,
+    };
+  }
 
   const tool = registry.get(toolName);
   if (tool === undefined) {

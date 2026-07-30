@@ -3,6 +3,7 @@
  * independent tasks in parallel (bounded concurrency). A failed task marks
  * its transitive dependents blocked; independent branches keep going.
  */
+import { queueForApproval, requiresApproval } from "../approvals";
 import { logEvent } from "../audit";
 import { getDb } from "../db";
 import { produceWithReview } from "./critic";
@@ -35,6 +36,8 @@ export interface GoalReport {
   failed: number;
   blocked: number;
   escalated: number;
+  /** Outbound actions queued for the human. Nothing external fires without a click. */
+  approvalsPending: string[];
   totalCostUsd: number;
   report: string;
 }
@@ -77,6 +80,7 @@ export async function runGoal(goalId: string): Promise<GoalReport> {
   const status = new Map(tasks.map((t) => [t.id, t.status]));
   const outputs = new Map<string, string>();
   const inFlight = new Map<string, Promise<void>>();
+  const approvalsCreated: string[] = [];
 
   const setStatus = (taskId: string, s: string, result?: string): void => {
     status.set(taskId, s);
@@ -123,11 +127,31 @@ export async function runGoal(goalId: string): Promise<GoalReport> {
       acceptanceCriteria: t.acceptance_criteria ?? "",
       basePrompt: buildTaskPrompt(t, depOutputs),
     })
-      .then((res) => {
-        // Escalated work is still passed downstream — it exists, it just
-        // needs a human decision, which is recorded in the escalations table.
+      .then(async (res) => {
         outputs.set(t.id, res.output);
         setStatus(t.id, res.status === "escalated" ? "escalated" : "completed", res.output);
+
+        // Reviewed work by an agent with gated actions goes through the legal
+        // gate and into the approval queue. The task itself is done — the card
+        // gates the external action, which never fires without a human click.
+        if (res.status === "completed" && requiresApproval(t.agent_id)) {
+          try {
+            const { approvalId } = await queueForApproval({
+              workspaceId: t.workspace_id,
+              agentId: t.agent_id,
+              taskId: t.id,
+              content: res.output,
+              context: t.instruction,
+            });
+            approvalsCreated.push(approvalId);
+          } catch (err) {
+            console.error(
+              `failed to queue approval for task ${t.id}: ${
+                err instanceof Error ? err.message : String(err)
+              }`
+            );
+          }
+        }
       })
       .catch((err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);
@@ -188,12 +212,21 @@ export async function runGoal(goalId: string): Promise<GoalReport> {
       (counts.blocked > 0 ? `, ${counts.blocked} blocked` : "") +
       (counts.escalated > 0 ? `, ${counts.escalated} escalated to you` : ""),
     `Reviews: ${reviewStats.total} (${reviewStats.revisions ?? 0} sent back for revision)`,
+    ...(approvalsCreated.length > 0
+      ? [`Awaiting your approval: ${approvalsCreated.length} outbound action(s)`]
+      : []),
     `Total LLM cost: $${cost.usd.toFixed(4)}`,
     "",
     ...tasks.map((t) => `- [${status.get(t.id)}] ${t.id} (${t.agent_id}): ${t.instruction.slice(0, 100)}`),
   ];
   if (counts.escalated > 0) {
     lines.push("", `${counts.escalated} deliverable(s) need your decision — see GET /api/escalations`);
+  }
+  if (approvalsCreated.length > 0) {
+    lines.push(
+      "",
+      `${approvalsCreated.length} action(s) are queued and will NOT happen until you approve — see GET /api/approvals`
+    );
   }
   const report = lines.join("\n");
 
@@ -214,6 +247,7 @@ export async function runGoal(goalId: string): Promise<GoalReport> {
     failed: counts.failed,
     blocked: counts.blocked,
     escalated: counts.escalated,
+    approvalsPending: approvalsCreated,
     totalCostUsd: cost.usd,
     report,
   };

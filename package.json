@@ -16,6 +16,7 @@
     "demo:tools": "npm run build && node dist/scripts/demo-tools.js",
     "demo:critic": "npm run build && node dist/scripts/demo-critic.js",
     "demo:brain": "npm run build && node dist/scripts/demo-brain.js",
+    "demo:safety": "npm run build && node dist/scripts/demo-safety.js",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "engines": {

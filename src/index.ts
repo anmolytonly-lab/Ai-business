@@ -1,7 +1,10 @@
 import express from "express";
 import { runAgent } from "./agents/executor";
 import { getAgent, initRegistry, listAgents } from "./agents/registry";
+import { decideApproval, getApproval, listApprovals } from "./approvals";
 import { getAuditLog, logEvent } from "./audit";
+import { getSpendSnapshot } from "./safety/budget";
+import { isKillSwitchOn, setKillSwitch } from "./safety/killswitch";
 import {
   addDocument,
   approveDocument,
@@ -44,7 +47,7 @@ app.get("/api/status", (_req, res) => {
     )
     .get() as { usd: number };
   res.json({
-    phase: 6,
+    phase: 7,
     database: env.DATABASE_PATH,
     migrations: migrations.map((m) => m.name),
     vectorSearch: isVecAvailable(),
@@ -60,6 +63,8 @@ app.get("/api/status", (_req, res) => {
     handbookLoaded: getHandbook().length > 0,
     llmCallsLogged: llmCalls.n,
     todaySpendUsd: spend.usd,
+    killSwitchEngaged: isKillSwitchOn(),
+    pendingApprovals: listApprovals(DEFAULT_WORKSPACE_ID).length,
   });
 });
 
@@ -103,6 +108,66 @@ app.post("/api/agents/:id/run", (req, res) => {
       const status = message.startsWith("unknown agent") ? 404 : 502;
       res.status(status).json({ error: message });
     });
+});
+
+// ── Approval queue, budget guard, kill switch ─────────────────────────
+
+app.get("/api/approvals", (req, res) => {
+  const status = typeof req.query.status === "string" ? req.query.status : "pending";
+  res.json(
+    listApprovals(DEFAULT_WORKSPACE_ID, status).map((a) => ({
+      ...a,
+      payload: JSON.parse(a.payload) as unknown,
+      legal_flags: JSON.parse(a.legal_flags) as unknown,
+    }))
+  );
+});
+
+app.get("/api/approvals/:id", (req, res) => {
+  const card = getApproval(req.params.id);
+  if (card === undefined) {
+    res.status(404).json({ error: `unknown approval "${req.params.id}"` });
+    return;
+  }
+  res.json({
+    ...card,
+    payload: JSON.parse(card.payload) as unknown,
+    legal_flags: JSON.parse(card.legal_flags) as unknown,
+  });
+});
+
+/** The human's click. Nothing external happens until this is called. */
+app.post("/api/approvals/:id/decide", (req, res) => {
+  const decision: unknown = req.body?.decision;
+  const note: unknown = req.body?.note;
+  if (decision !== "approved" && decision !== "rejected") {
+    res.status(400).json({ error: 'body must be { "decision": "approved" | "rejected", "note"?: string }' });
+    return;
+  }
+  if (!decideApproval(req.params.id, decision, typeof note === "string" ? note : "")) {
+    res.status(404).json({ error: "no pending approval with that id" });
+    return;
+  }
+  res.json({ ok: true, decision });
+});
+
+app.get("/api/budget", (_req, res) => {
+  res.json(getSpendSnapshot());
+});
+
+app.get("/api/kill-switch", (_req, res) => {
+  res.json({ engaged: isKillSwitchOn() });
+});
+
+app.post("/api/kill-switch", (req, res) => {
+  const engaged: unknown = req.body?.engaged;
+  if (typeof engaged !== "boolean") {
+    res.status(400).json({ error: 'body must be { "engaged": boolean, "reason"?: string }' });
+    return;
+  }
+  const reason: unknown = req.body?.reason;
+  setKillSwitch(engaged, typeof reason === "string" ? reason : "");
+  res.json({ engaged });
 });
 
 // ── Company Brain ─────────────────────────────────────────────────────
@@ -271,15 +336,23 @@ getDb(); // open DB + run migrations before accepting traffic
 ensureDefaultWorkspace();
 initRegistry();
 initHandbook();
-logEvent({ workspaceId: DEFAULT_WORKSPACE_ID, eventType: "server_started", detail: { phase: 6 } });
+logEvent({ workspaceId: DEFAULT_WORKSPACE_ID, eventType: "server_started", detail: { phase: 7 } });
+if (isKillSwitchOn()) {
+  console.warn("NOTE: the kill switch is ENGAGED — agents will refuse to run until it is released.");
+}
 
 app.listen(env.PORT, () => {
-  console.log(`AgentCorp (Phase 6) listening on http://localhost:${env.PORT}`);
+  console.log(`AgentCorp (Phase 7) listening on http://localhost:${env.PORT}`);
   console.log(`  GET  /health`);
   console.log(`  GET  /api/status`);
   console.log(`  GET  /api/agents            list the registry`);
   console.log(`  GET  /api/agents/:id        full agent config`);
   console.log(`  POST /api/agents/:id/run    { "instruction": "..." }`);
+  console.log(`  GET  /api/approvals         pending outbound actions`);
+  console.log(`  POST /api/approvals/:id/decide  { "decision": "approved"|"rejected" }`);
+  console.log(`  GET  /api/budget            spend vs caps, per agent`);
+  console.log(`  GET  /api/kill-switch       current state`);
+  console.log(`  POST /api/kill-switch       { "engaged": boolean } halts all agents`);
   console.log(`  POST /api/documents         { "title", "content" } -> index into the Brain`);
   console.log(`  GET  /api/documents         list knowledge base documents`);
   console.log(`  POST /api/documents/:id/approve   approve an agent learning`);
