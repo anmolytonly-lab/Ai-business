@@ -109,7 +109,7 @@ async function callGemini(
   // Single choke point for safety: nothing reaches the model with the kill
   // switch engaged or a spend cap already met.
   assertNotKilled();
-  assertWithinBudget(opts.agentId);
+  assertWithinBudget(opts.agentId, opts.workspaceId);
 
   const apiKey = requireGeminiKey();
   const model = opts.model ?? env.GEMINI_MODEL;

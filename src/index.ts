@@ -38,7 +38,16 @@ import {
 import { createGoal, executeGoal, getGoal, listGoals } from "./orchestration/goals";
 import { listTools } from "./tools/registry";
 import { commandWhitelist, workspaceRoot } from "./tools/sandbox";
-import { DEFAULT_WORKSPACE_ID, ensureDefaultWorkspace } from "./workspace";
+import {
+  DEFAULT_WORKSPACE_ID,
+  createWorkspace,
+  ensureDefaultWorkspace,
+  listWorkspaces,
+  updateWorkspace,
+  workspaceExists,
+} from "./workspace";
+import { getIntegration, listIntegrations } from "./integrations";
+import { AgentWriteError, deleteAgent, listOverrides, writeAgent } from "./agents/store";
 
 const app = express();
 app.use(express.json({ limit: "1mb" }));
@@ -116,6 +125,13 @@ app.get("/api/agents/status", (_req, res) => {
   res.json(listAgentStatuses());
 });
 
+/** Which agents this workspace overrides. Must precede /api/agents/:id. */
+app.get("/api/agents/overrides", (req, res) => {
+  const workspaceId = ws(req, res);
+  if (workspaceId === null) return;
+  res.json({ workspaceId, overrides: listOverrides(workspaceId) });
+});
+
 app.get("/api/agents/:id", (req, res) => {
   const agent = getAgent(req.params.id);
   if (agent === undefined) {
@@ -125,13 +141,64 @@ app.get("/api/agents/:id", (req, res) => {
   res.json(agent);
 });
 
+// ── Agent builder: create / edit / delete agent JSON files ────────────
+
+/** Create a new agent in the shared roster. */
+app.post("/api/agents", (req, res) => {
+  try {
+    res.status(201).json(writeAgent(req.body));
+  } catch (err) {
+    const status = err instanceof AgentWriteError ? 400 : 500;
+    res.status(status).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+/**
+ * Save an agent. Without ?workspace= this edits the shared roster; with it,
+ * the change is written as an override for that workspace only.
+ */
+app.put("/api/agents/:id", (req, res) => {
+  const workspaceId = ws(req, res);
+  if (workspaceId === null) return;
+  const scoped = req.query.workspace !== undefined || req.headers["x-workspace-id"] !== undefined;
+  try {
+    res.json(
+      writeAgent(req.body, {
+        expectId: req.params.id,
+        ...(scoped && workspaceId !== DEFAULT_WORKSPACE_ID ? { workspaceId } : {}),
+      })
+    );
+  } catch (err) {
+    const status = err instanceof AgentWriteError ? 400 : 500;
+    res.status(status).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.delete("/api/agents/:id", (req, res) => {
+  const scopedWorkspace =
+    typeof req.query.workspace === "string" && req.query.workspace !== DEFAULT_WORKSPACE_ID
+      ? req.query.workspace
+      : undefined;
+  try {
+    if (!deleteAgent(req.params.id, scopedWorkspace)) {
+      res.status(404).json({ error: `no such agent file for "${req.params.id}"` });
+      return;
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
 app.post("/api/agents/:id/run", (req, res) => {
+  const workspaceId = ws(req, res);
+  if (workspaceId === null) return;
   const instruction: unknown = req.body?.instruction;
   if (typeof instruction !== "string" || instruction.trim() === "") {
     res.status(400).json({ error: 'body must be { "instruction": string }' });
     return;
   }
-  runAgent(req.params.id, instruction, { workspaceId: DEFAULT_WORKSPACE_ID })
+  runAgent(req.params.id, instruction, { workspaceId })
     .then((result) => res.json(result))
     .catch((err: unknown) => {
       const message = err instanceof Error ? err.message : String(err);
@@ -140,11 +207,99 @@ app.post("/api/agents/:id/run", (req, res) => {
     });
 });
 
+// ── Workspaces ────────────────────────────────────────────────────────
+
+/**
+ * Every request resolves a workspace from ?workspace= or the X-Workspace-Id
+ * header, defaulting to "default". Unknown ids are rejected rather than
+ * silently falling back, so one client's data can't leak into another's view.
+ */
+function resolveWorkspace(req: express.Request): string {
+  const raw =
+    (typeof req.query.workspace === "string" ? req.query.workspace : undefined) ??
+    (typeof req.headers["x-workspace-id"] === "string"
+      ? req.headers["x-workspace-id"]
+      : undefined);
+  if (raw === undefined || raw === "") return DEFAULT_WORKSPACE_ID;
+  if (!workspaceExists(raw)) throw new Error(`unknown workspace "${raw}"`);
+  return raw;
+}
+
+function ws(req: express.Request, res: express.Response): string | null {
+  try {
+    return resolveWorkspace(req);
+  } catch (err) {
+    res.status(404).json({ error: err instanceof Error ? err.message : String(err) });
+    return null;
+  }
+}
+
+app.get("/api/workspaces", (_req, res) => {
+  res.json(listWorkspaces(true));
+});
+
+app.post("/api/workspaces", (req, res) => {
+  const { id, name, description, dailyBudgetUsd } = req.body ?? {};
+  if (typeof id !== "string" || typeof name !== "string") {
+    res.status(400).json({ error: 'body must be { "id": string, "name": string, ... }' });
+    return;
+  }
+  try {
+    res.status(201).json(
+      createWorkspace({
+        id,
+        name,
+        ...(typeof description === "string" ? { description } : {}),
+        ...(typeof dailyBudgetUsd === "number" ? { dailyBudgetUsd } : {}),
+      })
+    );
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.post("/api/workspaces/:id", (req, res) => {
+  const { name, description, dailyBudgetUsd, archived } = req.body ?? {};
+  const updated = updateWorkspace(req.params.id, {
+    ...(typeof name === "string" ? { name } : {}),
+    ...(typeof description === "string" ? { description } : {}),
+    ...(dailyBudgetUsd === null || typeof dailyBudgetUsd === "number" ? { dailyBudgetUsd } : {}),
+    ...(typeof archived === "boolean" ? { archived } : {}),
+  });
+  if (updated === undefined) {
+    res.status(404).json({ error: `unknown workspace "${req.params.id}"` });
+    return;
+  }
+  res.json(updated);
+});
+
+// ── Integrations ──────────────────────────────────────────────────────
+
+app.get("/api/integrations", (_req, res) => {
+  res.json(listIntegrations());
+});
+
+app.post("/api/integrations/:id/test", (req, res) => {
+  const adapter = getIntegration(req.params.id);
+  if (adapter === undefined) {
+    res.status(404).json({ error: `unknown integration "${req.params.id}"` });
+    return;
+  }
+  adapter
+    .connect()
+    .then((result) => res.json(result))
+    .catch((err: unknown) =>
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) })
+    );
+});
+
 // ── Dashboard KPIs, scheduler & memory ────────────────────────────────
 
 app.get("/api/kpis", (req, res) => {
+  const workspaceId = ws(req, res);
+  if (workspaceId === null) return;
   const days = typeof req.query.days === "string" ? Number(req.query.days) : 7;
-  res.json(getKpis(DEFAULT_WORKSPACE_ID, Number.isFinite(days) && days > 0 ? days : 7));
+  res.json(getKpis(workspaceId, Number.isFinite(days) && days > 0 ? days : 7));
 });
 
 app.get("/api/routines", (_req, res) => {
@@ -157,7 +312,9 @@ app.get("/api/routines/runs", (_req, res) => {
 
 /** Fire a routine now, outside its schedule. */
 app.post("/api/routines/:id/run", (req, res) => {
-  triggerRoutine(req.params.id, DEFAULT_WORKSPACE_ID)
+  const workspaceId = ws(req, res);
+  if (workspaceId === null) return;
+  triggerRoutine(req.params.id, workspaceId)
     .then((result) => res.json(result))
     .catch((err: unknown) => {
       const message = err instanceof Error ? err.message : String(err);
@@ -166,9 +323,11 @@ app.post("/api/routines/:id/run", (req, res) => {
 });
 
 app.get("/api/memory", (req, res) => {
+  const workspaceId = ws(req, res);
+  if (workspaceId === null) return;
   res.json(
     listMemory(
-      DEFAULT_WORKSPACE_ID,
+      workspaceId,
       typeof req.query.agentId === "string" ? req.query.agentId : undefined
     )
   );
@@ -177,6 +336,8 @@ app.get("/api/memory", (req, res) => {
 // ── Chat with the CEO ─────────────────────────────────────────────────
 
 app.post("/api/chat", (req, res) => {
+  const workspaceId = ws(req, res);
+  if (workspaceId === null) return;
   const message: unknown = req.body?.message;
   const history: unknown = req.body?.history;
   if (typeof message !== "string" || message.trim() === "") {
@@ -192,7 +353,7 @@ app.post("/api/chat", (req, res) => {
           typeof (t as ChatTurn).content === "string"
       ) as ChatTurn[])
     : [];
-  chatWithCeo(DEFAULT_WORKSPACE_ID, message.trim(), turns)
+  chatWithCeo(workspaceId, message.trim(), turns)
     .then((reply) => res.json(reply))
     .catch((err: unknown) =>
       res.status(502).json({ error: err instanceof Error ? err.message : String(err) })
@@ -202,9 +363,11 @@ app.post("/api/chat", (req, res) => {
 // ── Approval queue, budget guard, kill switch ─────────────────────────
 
 app.get("/api/approvals", (req, res) => {
+  const workspaceId = ws(req, res);
+  if (workspaceId === null) return;
   const status = typeof req.query.status === "string" ? req.query.status : "pending";
   res.json(
-    listApprovals(DEFAULT_WORKSPACE_ID, status).map((a) => ({
+    listApprovals(workspaceId, status).map((a) => ({
       ...a,
       payload: JSON.parse(a.payload) as unknown,
       legal_flags: JSON.parse(a.legal_flags) as unknown,
@@ -262,21 +425,25 @@ app.post("/api/kill-switch", (req, res) => {
 // ── Company Brain ─────────────────────────────────────────────────────
 
 app.post("/api/documents", (req, res) => {
+  const workspaceId = ws(req, res);
+  if (workspaceId === null) return;
   const title: unknown = req.body?.title;
   const content: unknown = req.body?.content;
   if (typeof title !== "string" || typeof content !== "string" || content.trim() === "") {
     res.status(400).json({ error: 'body must be { "title": string, "content": string }' });
     return;
   }
-  addDocument({ workspaceId: DEFAULT_WORKSPACE_ID, title, content, source: "owner" })
+  addDocument({ workspaceId, title, content, source: "owner" })
     .then((result) => res.status(201).json(result))
     .catch((err: unknown) =>
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) })
     );
 });
 
-app.get("/api/documents", (_req, res) => {
-  res.json(listDocuments(DEFAULT_WORKSPACE_ID));
+app.get("/api/documents", (req, res) => {
+  const workspaceId = ws(req, res);
+  if (workspaceId === null) return;
+  res.json(listDocuments(workspaceId));
 });
 
 app.get("/api/documents/:id", (req, res) => {
@@ -306,12 +473,14 @@ app.delete("/api/documents/:id", (req, res) => {
 });
 
 app.post("/api/brain/search", (req, res) => {
+  const workspaceId = ws(req, res);
+  if (workspaceId === null) return;
   const query: unknown = req.body?.query;
   if (typeof query !== "string" || query.trim() === "") {
     res.status(400).json({ error: 'body must be { "query": string }' });
     return;
   }
-  search(DEFAULT_WORKSPACE_ID, query)
+  search(workspaceId, query)
     .then((hits) => res.json(hits))
     .catch((err: unknown) =>
       res.status(500).json({ error: err instanceof Error ? err.message : String(err) })
@@ -336,20 +505,24 @@ app.get("/api/tools", (_req, res) => {
 
 // Creates a goal and kicks off plan+run in the background; poll GET /api/goals/:id.
 app.post("/api/goals", (req, res) => {
+  const workspaceId = ws(req, res);
+  if (workspaceId === null) return;
   const description: unknown = req.body?.description;
   if (typeof description !== "string" || description.trim() === "") {
     res.status(400).json({ error: 'body must be { "description": string }' });
     return;
   }
-  const goalId = createGoal(DEFAULT_WORKSPACE_ID, description.trim());
+  const goalId = createGoal(workspaceId, description.trim());
   executeGoal(goalId).catch((err: unknown) => {
     console.error(`goal ${goalId} failed:`, err instanceof Error ? err.message : err);
   });
   res.status(202).json({ goalId, status: "planning", poll: `/api/goals/${goalId}` });
 });
 
-app.get("/api/goals", (_req, res) => {
-  res.json(listGoals(DEFAULT_WORKSPACE_ID));
+app.get("/api/goals", (req, res) => {
+  const workspaceId = ws(req, res);
+  if (workspaceId === null) return;
+  res.json(listGoals(workspaceId));
 });
 
 app.get("/api/goals/:id", (req, res) => {
@@ -364,8 +537,10 @@ app.get("/api/goals/:id", (req, res) => {
 // ── Escalations (critic loop ran out of revision rounds) ──────────────
 
 app.get("/api/escalations", (req, res) => {
+  const workspaceId = ws(req, res);
+  if (workspaceId === null) return;
   const status = typeof req.query.status === "string" ? req.query.status : "open";
-  res.json(listEscalations(DEFAULT_WORKSPACE_ID, status));
+  res.json(listEscalations(workspaceId, status));
 });
 
 app.post("/api/escalations/:id/resolve", (req, res) => {

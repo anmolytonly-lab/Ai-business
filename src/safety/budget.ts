@@ -7,11 +7,12 @@
 import { logEvent } from "../audit";
 import { env } from "../config/env";
 import { getDb } from "../db";
+import { workspaceDailyBudget } from "../workspace";
 
 export class BudgetExceededError extends Error {
   constructor(
     message: string,
-    public readonly scope: "daily" | "agent"
+    public readonly scope: "daily" | "agent" | "workspace"
   ) {
     super(message);
     this.name = "BudgetExceededError";
@@ -79,11 +80,38 @@ function maybeAlert(spend: number): void {
  * Called before every model call. Throws BudgetExceededError when a cap is
  * already met, so spend stops rather than overshooting.
  */
-export function assertWithinBudget(agentId?: string): void {
+export function assertWithinBudget(agentId?: string, workspaceId?: string): void {
   const startOfDay = `${today()}T00:00:00`;
   const daily = spendSince(startOfDay);
 
   maybeAlert(daily);
+
+  // A workspace may set its own daily cap; it applies on top of the global one.
+  if (workspaceId !== undefined) {
+    const cap = workspaceDailyBudget(workspaceId);
+    if (cap !== null && cap > 0) {
+      const wsSpend = (
+        getDb()
+          .prepare(
+            "SELECT COALESCE(SUM(cost_usd), 0) AS usd FROM llm_calls WHERE created_at >= ? AND workspace_id = ?"
+          )
+          .get(startOfDay, workspaceId) as { usd: number }
+      ).usd;
+      if (wsSpend >= cap) {
+        logEvent({
+          workspaceId,
+          eventType: "budget_hard_stop",
+          detail: { scope: "workspace", spendUsd: wsSpend, budgetUsd: cap },
+        });
+        throw new BudgetExceededError(
+          `Workspace "${workspaceId}" has used $${wsSpend.toFixed(4)} of its $${cap.toFixed(
+            2
+          )} daily cap and is stopped for today.`,
+          "workspace"
+        );
+      }
+    }
+  }
 
   if (env.DAILY_BUDGET_USD > 0 && daily >= env.DAILY_BUDGET_USD) {
     logEvent({

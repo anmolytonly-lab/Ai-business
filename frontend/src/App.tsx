@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import {
+  Building2,
   Gauge,
   Inbox,
   LayoutGrid,
@@ -7,18 +8,21 @@ import {
   Network,
   Power,
   ScrollText,
+  Wrench,
 } from "lucide-react";
-import { api, type Budget, type Status } from "@/lib/api";
+import { api, getWorkspaceId, type Budget, type Status, type Workspace } from "@/lib/api";
 import { Badge, Button, Spinner } from "@/components/ui";
 import { cn, money } from "@/lib/utils";
 import { Approvals } from "@/views/Approvals";
 import { AuditLog } from "@/views/AuditLog";
 import { Chat } from "@/views/Chat";
+import { AgentBuilder } from "@/views/AgentBuilder";
 import { Dashboard } from "@/views/Dashboard";
+import { Settings } from "@/views/Settings";
 import { OrgChart } from "@/views/OrgChart";
 import { TaskBoard } from "@/views/TaskBoard";
 
-type Tab = "dashboard" | "chat" | "org" | "tasks" | "approvals" | "audit";
+type Tab = "dashboard" | "chat" | "org" | "tasks" | "approvals" | "audit" | "builder" | "settings";
 
 const TABS: { key: Tab; label: string; icon: React.ReactNode }[] = [
   { key: "dashboard", label: "Dashboard", icon: <Gauge size={15} /> },
@@ -27,6 +31,8 @@ const TABS: { key: Tab; label: string; icon: React.ReactNode }[] = [
   { key: "tasks", label: "Tasks", icon: <LayoutGrid size={15} /> },
   { key: "approvals", label: "Inbox", icon: <Inbox size={15} /> },
   { key: "audit", label: "Audit", icon: <ScrollText size={15} /> },
+  { key: "builder", label: "Agents", icon: <Wrench size={15} /> },
+  { key: "settings", label: "Settings", icon: <Building2 size={15} /> },
 ];
 
 export default function App() {
@@ -35,6 +41,7 @@ export default function App() {
   const [budget, setBudget] = useState<Budget | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
 
   const refresh = useCallback(() => setRefreshKey((k) => k + 1), []);
 
@@ -42,10 +49,11 @@ export default function App() {
     let alive = true;
     const load = async () => {
       try {
-        const [s, b] = await Promise.all([api.status(), api.budget()]);
+        const [s, b, w] = await Promise.all([api.status(), api.budget(), api.workspaces()]);
         if (alive) {
           setStatus(s);
           setBudget(b);
+          setWorkspaces(w);
           setError(null);
         }
       } catch (err) {
@@ -69,6 +77,8 @@ export default function App() {
   }
 
   const killed = status?.killSwitchEngaged === true;
+  const workspaceName =
+    workspaces.find((w) => w.id === getWorkspaceId())?.name ?? getWorkspaceId();
 
   return (
     <div className="flex h-full flex-col">
@@ -114,6 +124,14 @@ export default function App() {
             <Spinner />
           ) : (
             <>
+              <button
+                onClick={() => setTab("settings")}
+                className="flex items-center gap-1 rounded border border-[var(--color-border)] px-2 py-1 text-[var(--color-muted)] hover:text-[var(--color-fg)]"
+                title="Switch workspace"
+              >
+                <Building2 size={12} />
+                {workspaceName}
+              </button>
               <span className="text-[var(--color-muted)]">
                 {status.agentsLoaded} agents · {status.documentsIndexed} docs
               </span>
@@ -171,6 +189,12 @@ export default function App() {
         {tab === "audit" && (
           <div className="h-full overflow-y-auto">
             <AuditLog />
+          </div>
+        )}
+        {tab === "builder" && <AgentBuilder />}
+        {tab === "settings" && (
+          <div className="h-full overflow-y-auto">
+            <Settings onSwitch={refresh} />
           </div>
         )}
       </main>

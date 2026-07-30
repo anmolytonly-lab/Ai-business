@@ -2,10 +2,29 @@
 
 const BASE = "/api";
 
+/**
+ * Selected workspace, sent on every request. Persisted so a reload keeps the
+ * client you were looking at.
+ */
+let workspaceId = localStorage.getItem("agentcorp.workspace") ?? "default";
+
+export function getWorkspaceId(): string {
+  return workspaceId;
+}
+
+export function setWorkspaceId(id: string): void {
+  workspaceId = id;
+  localStorage.setItem("agentcorp.workspace", id);
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
-    headers: { "Content-Type": "application/json" },
     ...init,
+    headers: {
+      "Content-Type": "application/json",
+      "X-Workspace-Id": workspaceId,
+      ...(init?.headers ?? {}),
+    },
   });
   if (!res.ok) {
     const body = (await res.json().catch(() => ({}))) as { error?: string };
@@ -171,8 +190,71 @@ export interface Routine {
   lastRun: RoutineRun | null;
 }
 
+export interface Workspace {
+  id: string;
+  name: string;
+  description: string;
+  daily_budget_usd: number | null;
+  archived: number;
+  created_at: string;
+  goals: number;
+  documents: number;
+  spendTodayUsd: number;
+}
+
+export interface Integration {
+  id: string;
+  name: string;
+  description: string;
+  category: string;
+  capabilities: string[];
+  requiredEnv: string[];
+  configured: boolean;
+}
+
+export interface AgentFull {
+  id: string;
+  name: string;
+  department: string;
+  role: string;
+  systemPrompt: string;
+  tools: string[];
+  reportsTo: string;
+  canDelegateTo: string[];
+  model: string;
+  temperature: number;
+  maxCostPerTask: number;
+  requiresApproval: string[];
+}
+
 export const api = {
   status: () => request<Status>("/status"),
+  workspaces: () => request<Workspace[]>("/workspaces"),
+  createWorkspace: (body: {
+    id: string;
+    name: string;
+    description?: string;
+    dailyBudgetUsd?: number | null;
+  }) => request<Workspace>("/workspaces", { method: "POST", body: JSON.stringify(body) }),
+  updateWorkspace: (id: string, body: Record<string, unknown>) =>
+    request<Workspace>(`/workspaces/${id}`, { method: "POST", body: JSON.stringify(body) }),
+  integrations: () => request<Integration[]>("/integrations"),
+  testIntegration: (id: string) =>
+    request<{ configured: boolean; message: string; missing: string[] }>(
+      `/integrations/${id}/test`,
+      { method: "POST" }
+    ),
+  agentFull: (id: string) => request<AgentFull>(`/agents/${id}`),
+  saveAgent: (id: string, body: AgentFull, scopeToWorkspace = false) =>
+    request<AgentFull>(`/agents/${id}${scopeToWorkspace ? "" : "?workspace=default"}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  createAgent: (body: AgentFull) =>
+    request<AgentFull>("/agents", { method: "POST", body: JSON.stringify(body) }),
+  deleteAgent: (id: string) => request<{ ok: boolean }>(`/agents/${id}`, { method: "DELETE" }),
+  tools: () =>
+    request<{ tools: { name: string; description: string; external: boolean }[] }>("/tools"),
   kpis: (days = 7) => request<KpiSnapshot>(`/kpis?days=${days}`),
   routines: () => request<Routine[]>("/routines"),
   routineRuns: () => request<RoutineRun[]>("/routines/runs"),

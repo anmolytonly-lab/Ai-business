@@ -4,16 +4,16 @@ A fully autonomous AI-run business: an AI executive team handles strategy,
 product, marketing, sales, support, finance and reporting. A human owner sets
 goals and approves critical actions; everything else is automated.
 
-**Status: Phase 9 complete** — the company runs itself on a schedule, with a
-KPI dashboard over the results.
+**Status: Phase 10 complete** — integration adapters, an agent builder UI, and
+multi-workspace isolation.
 
 ## Stack
 
 - Backend: Node.js ≥ 20 + Express, TypeScript strict
-- DB: SQLite (better-sqlite3), vector search via sqlite-vec (loaded now, used from Phase 6)
+- DB: SQLite (better-sqlite3) with sqlite-vec for knowledge-base vector search
 - LLM: Gemini API through one provider module (`src/llm/provider.ts`)
 - Frontend: React 18 + Vite + Tailwind v4 + shadcn/ui-style components
-- Desktop (Phase 11): Electron wrapper
+- Desktop (Phase 11): Electron wrapper loading the same built frontend
 
 ## Setup
 
@@ -65,6 +65,9 @@ a grounded answer, a refusal on undocumented facts, and handbook enforcement.
 `npm run demo:safety` shows the legal gate, an approval card, the kill switch
 halting an agent mid-flight, and the budget snapshot.
 
+The dashboard's **Agents** tab is the agent builder; **Settings** holds
+workspaces and integrations.
+
 ### Endpoints
 
 | Route | Description |
@@ -84,6 +87,11 @@ halting an agent mid-flight, and the budget snapshot.
 | `DELETE /api/documents/:id` | Remove a document and its vectors |
 | `POST /api/brain/search` `{ "query": "..." }` | Semantic search with scores |
 | `GET /api/handbook` | The company handbook text |
+| `GET /api/workspaces` / `POST /api/workspaces` | List and create workspaces |
+| `POST /api/workspaces/:id` | Update name, description, budget, archived |
+| `GET /api/integrations` | Adapters with configured state and required env |
+| `POST /api/integrations/:id/test` | Connection check (reports what's missing) |
+| `POST /api/agents` / `PUT /api/agents/:id` / `DELETE /api/agents/:id` | Agent builder |
 | `GET /api/kpis` `?days=7` | Dashboard KPIs, spend series, task/agent breakdowns |
 | `GET /api/routines` | Routines with next run and last result |
 | `POST /api/routines/:id/run` | Fire a routine now, outside its schedule |
@@ -115,10 +123,10 @@ video_scriptwriter, email_marketer, creative_director), sales & customer
 (sales_rep, dm_manager, support_agent, onboarding, retention), ops & insight
 (analyst, researcher, legal_compliance, bookkeeper, hr_reviewer).
 
-`tools[]` and `requiresApproval[]` are declarations for now — the tool
-system arrives in Phase 4 and the approval queue in Phase 7. Note:
-`support_agent` is prompted to answer only from the knowledge base, but the
-Company Brain doesn't exist until Phase 6, so it can still improvise today.
+`tools[]` is the enforcement point for what an agent may call — including
+which integrations it can reach. `requiresApproval[]` lists the outbound
+actions it may never take without your click. Agents can be created and edited
+from the **Agents** tab in the dashboard, which writes these files directly.
 
 Every run writes `agent_run_started` / `agent_run_completed` (or
 `agent_run_failed`) events to `audit_log`, plus the full prompt/response/cost
@@ -134,7 +142,8 @@ company_handbook.md      # brand voice + forbidden claims, injected everywhere
 frontend/                # React + Vite + Tailwind dashboard
   src/lib/api.ts         # typed API client
   src/components/ui/     # shadcn/ui-style primitives
-  src/views/             # Dashboard, Chat, OrgChart, TaskBoard, Approvals, AuditLog
+  src/views/             # Dashboard, Chat, OrgChart, TaskBoard, Approvals,
+                         #   AuditLog, AgentBuilder, Settings
 src/
   agents/schema.ts       # zod schema for agent config files
   agents/registry.ts     # load + validate + hot-reload the registry
@@ -143,6 +152,8 @@ src/
   orchestration/planner.ts  # CEO goal -> validated task DAG + hard caps
   orchestration/runner.ts   # TaskRunner: dependency-aware parallel execution
   chat.ts                # owner <-> CEO conversation
+  agents/store.ts        # agent-file writes (path-safe) + workspace overrides
+  integrations/          # one interface, eight clearly-marked stub adapters
   kpis.ts                # dashboard metrics (honest about unconnected sources)
   memory.ts              # episodic memory + scheduled compaction
   scheduler/cron.ts      # 5-field cron parser (no dependency)
@@ -174,6 +185,52 @@ workspace/               # agent filesystem sandbox (gitignored)
   index.ts               # Express server
 data/                    # SQLite database (gitignored)
 ```
+
+## Integrations, agent builder & workspaces (Phase 10)
+
+### Integration adapters
+
+Eight adapters behind one interface (`connect`, `read`, `write`,
+`isConfigured`): Gmail, WhatsApp Cloud API, Instagram Graph API, Google
+Sheets, Notion, Stripe, Razorpay and Google Analytics.
+
+**Every one ships as a clearly-marked stub and the system runs fully with all
+of them off.** With no credentials an adapter returns an explicit
+`NOT CONFIGURED` result naming the env vars it needs, stating that nothing was
+sent or read, and telling the agent *not to invent data from this source*. An
+adapter that has credentials but no live implementation says exactly that,
+rather than returning an empty result that would read as "no data".
+
+Each adapter is exposed as its own tool (`integration_<id>`), so the existing
+per-agent `tools[]` grant is the enforcement point for spec item 14 — no agent
+can reach an integration it wasn't granted. Writes are gated twice: an agent
+whose `requiresApproval[]` covers an outbound action is refused a direct write
+and told to route the content through the approval queue instead.
+
+### Agent builder
+
+Create, edit and delete agents from the browser; changes are written straight
+to `agents/<id>.json`, zod-validated, and hot-reloaded. The form covers the
+system prompt, tools, integrations, gated actions, delegation, model,
+temperature and cost cap.
+
+Every path is derived from a validated id (`^[a-z][a-z0-9_]*$`), so an id from
+an HTTP request can never escape the agents directory — `../../evil`, `a/b`
+and mixed case are all rejected, as is a body whose id doesn't match the agent
+being edited.
+
+### Workspaces
+
+Multiple businesses/clients, isolated in the DB. Each has its own knowledge
+base, goals, tasks, approvals, memory and **daily budget cap** (enforced by the
+budget guard alongside the global and per-agent caps). Agent config can be
+overridden per workspace in `agents/workspaces/<id>/`, merged over the shared
+roster.
+
+Requests carry `X-Workspace-Id` (or `?workspace=`); an unknown id is rejected
+rather than silently falling back to default. Verified by 34 tests including
+both directions of isolation — one client's documents never appear in
+another's list or search.
 
 ## Scheduler, routines & KPIs (Phase 9)
 

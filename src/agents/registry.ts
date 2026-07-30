@@ -8,6 +8,9 @@ import path from "node:path";
 import { logEvent } from "../audit";
 import { AgentConfig, agentSchema } from "./schema";
 
+// Overrides live under agents/workspaces/<id>/ and must not be loaded as
+// shared-roster agents.
+
 const AGENTS_DIR = path.resolve(process.cwd(), "agents");
 const agents = new Map<string, AgentConfig>();
 let watcher: fs.FSWatcher | null = null;
@@ -40,6 +43,8 @@ function loadAll(reason: "startup" | "reload"): void {
     console.warn(`agents directory not found at ${AGENTS_DIR}`);
     return;
   }
+  // Only top-level files are the shared roster; agents/workspaces/<id>/ holds
+  // per-workspace overrides, merged in by getAgentForWorkspace().
   const files = fs.readdirSync(AGENTS_DIR).filter((f) => f.endsWith(".json")).sort();
   const seen = new Set<string>();
   let loaded = 0;
@@ -100,4 +105,36 @@ export function getAgent(id: string): AgentConfig | undefined {
 
 export function listAgents(): AgentConfig[] {
   return [...agents.values()].sort((a, b) => a.id.localeCompare(b.id));
+}
+
+/** Force a reload — used after the Agent Builder writes a file. */
+export function reloadRegistry(): void {
+  loadAll("reload");
+}
+
+/**
+ * Resolve an agent for a workspace: the shared roster config with that
+ * workspace's override merged on top. Imported lazily to avoid a cycle with
+ * the store module.
+ */
+export function getAgentForWorkspace(
+  workspaceId: string,
+  agentId: string
+): AgentConfig | undefined {
+  const base = agents.get(agentId);
+  if (base === undefined) return undefined;
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { readOverride } = require("./store") as {
+    readOverride: (w: string, a: string) => Partial<AgentConfig> | null;
+  };
+  const override = readOverride(workspaceId, agentId);
+  if (override === null) return base;
+  const merged = agentSchema.safeParse({ ...base, ...override, id: base.id });
+  if (!merged.success) {
+    console.error(
+      `workspace ${workspaceId} override for ${agentId} is invalid, using the shared config: ${merged.error.message}`
+    );
+    return base;
+  }
+  return merged.data;
 }

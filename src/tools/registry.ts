@@ -9,6 +9,7 @@ import { isKillSwitchOn } from "../safety/killswitch";
 import { SandboxViolation } from "./sandbox";
 import { dbQueryTool } from "./impl/db";
 import { fileListTool, fileReadTool, fileWriteTool } from "./impl/files";
+import { integrationTools } from "./impl/integrations";
 import { kbSearchTool, kbWriteTool } from "./impl/kb";
 import { shellTool } from "./impl/shell";
 import { webSearchTool } from "./impl/stubs";
@@ -29,6 +30,7 @@ const ALL_TOOLS: ToolDefinition<any>[] = [
   kbSearchTool,
   kbWriteTool,
   webSearchTool,
+  ...integrationTools,
 ];
 /* eslint-enable @typescript-eslint/no-explicit-any */
 
