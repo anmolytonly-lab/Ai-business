@@ -4,9 +4,9 @@ A fully autonomous AI-run business: an AI executive team handles strategy,
 product, marketing, sales, support, finance and reporting. A human owner sets
 goals and approves critical actions; everything else is automated.
 
-**Status: Phase 1 complete** — scaffold, environment config, SQLite schema,
-LLM provider module, working Gemini call (demo script + HTTP endpoint), and
-per-call audit/cost logging.
+**Status: Phase 2 complete** — agent registry (27 seed agents as JSON files
+with hot-reload), single-agent execution through the LLM provider, and full
+audit logging of every run.
 
 ## Stack
 
@@ -37,27 +37,66 @@ npm run demo:llm   # Phase 1 demo: one Gemini call (text + validated JSON) with 
 ```
 
 `npm run demo:llm "your prompt"` sends a custom prompt.
+`npm run demo:agent [agentId] ["instruction"]` runs one agent end-to-end and
+prints its audit trail (defaults to `seo_writer`).
 
-### Endpoints (Phase 1)
+### Endpoints
 
 | Route | Description |
 |---|---|
 | `GET /health` | Liveness check |
-| `GET /api/status` | DB/migrations/vector-extension/model status |
-| `POST /api/llm/test` `{ "prompt": "..." }` | One audited Gemini call through the provider |
+| `GET /api/status` | DB, migrations, agents loaded, today's spend |
+| `GET /api/agents` | Registry summary (id, department, reporting line, tools) |
+| `GET /api/agents/:id` | Full agent config including system prompt |
+| `POST /api/agents/:id/run` `{ "instruction": "..." }` | Execute one agent, fully audited |
+| `GET /api/audit` `?limit=&agentId=&eventType=` | Audit trail |
+| `POST /api/llm/test` `{ "prompt": "..." }` | Raw provider call (Phase 1) |
+
+## Agent registry
+
+Agents are JSON files in `/agents/*.json` — never hardcoded. Files are
+zod-validated on load and **hot-reloaded on change**; a file that fails
+validation logs the error and keeps the previous good version in memory.
+Schema: `{ id, name, department, role, systemPrompt, tools[], reportsTo,
+canDelegateTo[], model, temperature, maxCostPerTask, requiresApproval[] }`.
+
+Seed roster (27 agents): executive (ceo, coo, cfo, chief_of_staff),
+product & tech (developer, code_reviewer, qa_tester, devops, ui_designer),
+marketing (cmo, seo_writer, ad_copywriter, social_manager, instagram_agent,
+video_scriptwriter, email_marketer, creative_director), sales & customer
+(sales_rep, dm_manager, support_agent, onboarding, retention), ops & insight
+(analyst, researcher, legal_compliance, bookkeeper, hr_reviewer).
+
+`tools[]` and `requiresApproval[]` are declarations for now — the tool
+system arrives in Phase 4 and the approval queue in Phase 7. Note:
+`support_agent` is prompted to answer only from the knowledge base, but the
+Company Brain doesn't exist until Phase 6, so it can still improvise today.
+
+Every run writes `agent_run_started` / `agent_run_completed` (or
+`agent_run_failed`) events to `audit_log`, plus the full prompt/response/cost
+row in `llm_calls`. Runs whose cost exceeds the agent's `maxCostPerTask` get
+an `agent_over_budget` event (hard enforcement lands with the Phase 7 budget
+guard).
 
 ## Project layout
 
 ```
+agents/                  # one JSON file per agent (hot-reloaded)
 src/
-  config/env.ts        # .env loading + zod validation
-  db/index.ts          # better-sqlite3 connection, sqlite-vec load, migration runner
-  db/migrations/       # numbered .sql migrations
-  llm/provider.ts      # THE Gemini provider: retries/backoff, JSON+zod path, cost + audit logging
+  agents/schema.ts       # zod schema for agent config files
+  agents/registry.ts     # load + validate + hot-reload the registry
+  agents/executor.ts     # runAgent(): audited single-agent execution
+  audit.ts               # audit_log write/read helpers
+  workspace.ts           # default workspace bootstrap (multi-tenant in Phase 10)
+  config/env.ts          # .env loading + zod validation
+  db/index.ts            # better-sqlite3 connection, sqlite-vec load, migration runner
+  db/migrations/         # numbered .sql migrations
+  llm/provider.ts        # THE Gemini provider: retries/backoff, JSON+zod path, cost + audit logging
   llm/types.ts
-  scripts/demo-llm.ts  # Phase 1 demo call
-  index.ts             # Express server
-data/                  # SQLite database (gitignored)
+  scripts/demo-llm.ts    # Phase 1 demo call
+  scripts/demo-agent.ts  # Phase 2 demo: run one agent + show audit trail
+  index.ts               # Express server
+data/                    # SQLite database (gitignored)
 ```
 
 ## Database schema (Phase 1)
@@ -84,7 +123,7 @@ Tables created by `001_init.sql`, sized for the phases ahead:
 ## Build phases
 
 1. ✅ Scaffold, .env.example, DB schema, LLM provider, one working Gemini call
-2. Agent registry (`/agents/*.json`) + single-agent execution + full audit logging
+2. ✅ Agent registry (`/agents/*.json`) + single-agent execution + full audit logging
 3. CEO orchestration, task DAG, TaskRunner with dependencies
 4. Tool system with per-agent permissions + sandbox
 5. Critic loop + revision rounds + escalation
