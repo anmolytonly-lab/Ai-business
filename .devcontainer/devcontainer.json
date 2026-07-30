@@ -1,0 +1,33 @@
+{
+  "name": "AgentCorp",
+  "image": "mcr.microsoft.com/devcontainers/javascript-node:22",
+
+  // Installs backend + frontend deps and builds both. No API key needed for
+  // this step, so the Codespace comes up cleanly even before a key is set.
+  "postCreateCommand": "npm run setup",
+  "postAttachCommand": "bash .devcontainer/welcome.sh",
+
+  "forwardPorts": [3000],
+  "portsAttributes": {
+    "3000": {
+      "label": "AgentCorp dashboard",
+      "onAutoForward": "openPreview"
+    }
+  },
+
+  // Set GEMINI_API_KEY as a Codespaces secret and it lands here automatically:
+  // https://github.com/settings/codespaces  →  New secret
+  "secrets": {
+    "GEMINI_API_KEY": {
+      "description": "Gemini API key from https://aistudio.google.com/apikey — required for any agent to run."
+    }
+  },
+
+  "customizations": {
+    "vscode": {
+      "extensions": ["dbaeumer.vscode-eslint", "esbenp.prettier-vscode"]
+    }
+  },
+
+  "remoteUser": "node"
+}

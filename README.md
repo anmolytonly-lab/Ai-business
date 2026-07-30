@@ -14,11 +14,32 @@ goals and approves critical actions; everything else is automated.
 - Frontend: React 18 + Vite + Tailwind v4 + shadcn/ui-style components
 - Desktop: Electron wrapper in `/desktop` loading the same built frontend
 
-## Setup
+## Run it in the browser (no local setup)
+
+The fastest way to try it is **GitHub Codespaces** — nothing to install.
+
+1. On the repo page: **Code → Codespaces → Create codespace**
+2. Add your Gemini key once as a Codespaces secret named `GEMINI_API_KEY`
+   at <https://github.com/settings/codespaces>, then rebuild the Codespace.
+   (Or, inside the Codespace: `cp .env.example .env` and edit it.)
+3. In the Codespace terminal:
+
+```bash
+npm run seed     # load the business knowledge into the Company Brain
+npm start
+```
+
+4. Open port **3000** from the **PORTS** tab.
+
+The devcontainer installs and builds everything on creation, and prints what
+is still missing each time you attach.
+
+## Setup (local)
 
 ```bash
 npm run setup          # installs backend + frontend deps and builds both
 cp .env.example .env   # then add your GEMINI_API_KEY
+npm run seed           # load seed/*.md into the Company Brain
 ```
 
 Get a Gemini API key at https://aistudio.google.com/apikey. `.env` is
