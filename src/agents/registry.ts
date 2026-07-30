@@ -84,8 +84,11 @@ export function initRegistry(): void {
     watcher = fs.watch(AGENTS_DIR, () => {
       // Debounce editor write bursts into a single reload.
       if (reloadTimer) clearTimeout(reloadTimer);
-      reloadTimer = setTimeout(() => loadAll("reload"), 300);
+      reloadTimer = setTimeout(() => loadAll("reload"), 300).unref();
     });
+    // Don't hold the event loop open: the server stays alive on its socket,
+    // and one-shot scripts can exit when their work is done.
+    watcher.unref();
   } catch (err) {
     console.warn(`agents hot-reload watcher unavailable: ${err instanceof Error ? err.message : String(err)}`);
   }

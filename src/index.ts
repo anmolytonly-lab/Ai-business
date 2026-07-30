@@ -6,6 +6,7 @@ import { env } from "./config/env";
 import { getDb, isVecAvailable } from "./db";
 import { generateText } from "./llm/provider";
 import { LlmError } from "./llm/types";
+import { createGoal, executeGoal, getGoal, listGoals } from "./orchestration/goals";
 import { DEFAULT_WORKSPACE_ID, ensureDefaultWorkspace } from "./workspace";
 
 const app = express();
@@ -27,7 +28,7 @@ app.get("/api/status", (_req, res) => {
     )
     .get() as { usd: number };
   res.json({
-    phase: 2,
+    phase: 3,
     database: env.DATABASE_PATH,
     migrations: migrations.map((m) => m.name),
     vectorSearch: isVecAvailable(),
@@ -81,6 +82,35 @@ app.post("/api/agents/:id/run", (req, res) => {
     });
 });
 
+// ── Goals & orchestration ─────────────────────────────────────────────
+
+// Creates a goal and kicks off plan+run in the background; poll GET /api/goals/:id.
+app.post("/api/goals", (req, res) => {
+  const description: unknown = req.body?.description;
+  if (typeof description !== "string" || description.trim() === "") {
+    res.status(400).json({ error: 'body must be { "description": string }' });
+    return;
+  }
+  const goalId = createGoal(DEFAULT_WORKSPACE_ID, description.trim());
+  executeGoal(goalId).catch((err: unknown) => {
+    console.error(`goal ${goalId} failed:`, err instanceof Error ? err.message : err);
+  });
+  res.status(202).json({ goalId, status: "planning", poll: `/api/goals/${goalId}` });
+});
+
+app.get("/api/goals", (_req, res) => {
+  res.json(listGoals(DEFAULT_WORKSPACE_ID));
+});
+
+app.get("/api/goals/:id", (req, res) => {
+  const goal = getGoal(req.params.id);
+  if (goal === undefined) {
+    res.status(404).json({ error: `unknown goal "${req.params.id}"` });
+    return;
+  }
+  res.json(goal);
+});
+
 // ── Audit log ─────────────────────────────────────────────────────────
 
 app.get("/api/audit", (req, res) => {
@@ -114,15 +144,18 @@ app.post("/api/llm/test", (req, res) => {
 getDb(); // open DB + run migrations before accepting traffic
 ensureDefaultWorkspace();
 initRegistry();
-logEvent({ workspaceId: DEFAULT_WORKSPACE_ID, eventType: "server_started", detail: { phase: 2 } });
+logEvent({ workspaceId: DEFAULT_WORKSPACE_ID, eventType: "server_started", detail: { phase: 3 } });
 
 app.listen(env.PORT, () => {
-  console.log(`AgentCorp (Phase 2) listening on http://localhost:${env.PORT}`);
+  console.log(`AgentCorp (Phase 3) listening on http://localhost:${env.PORT}`);
   console.log(`  GET  /health`);
   console.log(`  GET  /api/status`);
   console.log(`  GET  /api/agents            list the registry`);
   console.log(`  GET  /api/agents/:id        full agent config`);
   console.log(`  POST /api/agents/:id/run    { "instruction": "..." }`);
+  console.log(`  POST /api/goals             { "description": "..." } -> CEO plans + runs DAG`);
+  console.log(`  GET  /api/goals             list goals`);
+  console.log(`  GET  /api/goals/:id         goal + its task DAG`);
   console.log(`  GET  /api/audit             ?limit=&agentId=&eventType=`);
   console.log(`  POST /api/llm/test          { "prompt": "..." }`);
 });

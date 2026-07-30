@@ -12,6 +12,7 @@
     "migrate": "npm run build && node dist/db/migrate.js",
     "demo:llm": "npm run build && node dist/scripts/demo-llm.js",
     "demo:agent": "npm run build && node dist/scripts/demo-agent.js",
+    "demo:goal": "npm run build && node dist/scripts/demo-goal.js",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "engines": {

@@ -234,7 +234,7 @@ const JSON_ONLY_INSTRUCTION =
  */
 export async function generateJson<T>(
   prompt: string,
-  schema: z.ZodType<T>,
+  schema: z.ZodType<T, z.ZodTypeDef, unknown>,
   opts: GenerateOptions = {}
 ): Promise<{ data: T; usage: LlmUsage }> {
   const fullPrompt = `${prompt}\n\n${JSON_ONLY_INSTRUCTION}`;

@@ -4,9 +4,9 @@ A fully autonomous AI-run business: an AI executive team handles strategy,
 product, marketing, sales, support, finance and reporting. A human owner sets
 goals and approves critical actions; everything else is automated.
 
-**Status: Phase 2 complete** — agent registry (27 seed agents as JSON files
-with hot-reload), single-agent execution through the LLM provider, and full
-audit logging of every run.
+**Status: Phase 3 complete** — the CEO decomposes an owner goal into a task
+DAG and the TaskRunner executes it with dependency-aware parallelism, under
+hard caps.
 
 ## Stack
 
@@ -39,6 +39,8 @@ npm run demo:llm   # Phase 1 demo: one Gemini call (text + validated JSON) with 
 `npm run demo:llm "your prompt"` sends a custom prompt.
 `npm run demo:agent [agentId] ["instruction"]` runs one agent end-to-end and
 prints its audit trail (defaults to `seo_writer`).
+`npm run demo:goal ["goal"]` runs the full Phase 3 loop: owner goal → CEO
+plan → DAG execution → report.
 
 ### Endpoints
 
@@ -49,6 +51,9 @@ prints its audit trail (defaults to `seo_writer`).
 | `GET /api/agents` | Registry summary (id, department, reporting line, tools) |
 | `GET /api/agents/:id` | Full agent config including system prompt |
 | `POST /api/agents/:id/run` `{ "instruction": "..." }` | Execute one agent, fully audited |
+| `POST /api/goals` `{ "description": "..." }` | Set a goal; CEO plans and runs it (202, then poll) |
+| `GET /api/goals` | All goals with status and final report |
+| `GET /api/goals/:id` | One goal plus its full task DAG |
 | `GET /api/audit` `?limit=&agentId=&eventType=` | Audit trail |
 | `POST /api/llm/test` `{ "prompt": "..." }` | Raw provider call (Phase 1) |
 
@@ -87,6 +92,9 @@ src/
   agents/registry.ts     # load + validate + hot-reload the registry
   agents/executor.ts     # runAgent(): audited single-agent execution
   audit.ts               # audit_log write/read helpers
+  orchestration/planner.ts  # CEO goal -> validated task DAG + hard caps
+  orchestration/runner.ts   # TaskRunner: dependency-aware parallel execution
+  orchestration/goals.ts    # create/execute/read goals
   workspace.ts           # default workspace bootstrap (multi-tenant in Phase 10)
   config/env.ts          # .env loading + zod validation
   db/index.ts            # better-sqlite3 connection, sqlite-vec load, migration runner
@@ -95,16 +103,61 @@ src/
   llm/types.ts
   scripts/demo-llm.ts    # Phase 1 demo call
   scripts/demo-agent.ts  # Phase 2 demo: run one agent + show audit trail
+  scripts/demo-goal.ts   # Phase 3 demo: goal -> DAG -> execution report
   index.ts               # Express server
 data/                    # SQLite database (gitignored)
 ```
 
-## Database schema (Phase 1)
+## Orchestration (Phase 3)
+
+`POST /api/goals` hands the owner's goal to the CEO agent, which returns a
+task DAG:
+
+```json
+{ "tasks": [{ "id": "t1", "agentId": "cmo", "instruction": "...",
+              "dependsOn": [], "acceptanceCriteria": "..." }] }
+```
+
+The plan is zod-validated and then **semantically** checked before anything
+runs: every `agentId` must exist in the registry, the CEO may not assign work
+to itself, dependencies must reference real tasks, and the graph must be
+acyclic. A rejected plan goes back to the CEO once with the specific problems
+listed; if it still fails, the goal is marked failed with the reasons.
+
+`TaskRunner` (`src/orchestration/runner.ts`) then executes the DAG:
+
+- A task runs only once all its dependencies have completed; independent
+  tasks run in parallel (bounded at 3 concurrent LLM calls).
+- Each task's prompt carries its instruction, its acceptance criteria, and
+  the outputs of the tasks it depends on (truncated to 2500 chars each).
+- A failed task marks its transitive dependents `blocked` — independent
+  branches keep running rather than the whole goal dying.
+- The goal ends with a stored report: per-task status and total LLM cost.
+
+Observed on a real run (blog post + email sequence launch goal): an 8-task
+DAG across 5 agents, 8/8 completed in 75s for $0.04, with `ad_copywriter` and
+`email_marketer` executing concurrently as siblings.
+
+### Hard caps
+
+| Cap | Value | Behaviour |
+|---|---|---|
+| Tasks per goal | 40 | Planning refuses to exceed it; at the cap the goal stops and reports |
+| Delegation rounds | 5 | `goals.delegation_round` increments per planning pass; round 6 stops and reports |
+
+Both raise `CapExceededError`, mark the goal failed with an explanatory
+report, and log `task_cap_reached` / `delegation_cap_reached` audit events.
+Phase 3 only uses round 1 (the CEO's initial plan); the counter is the hook
+for agent-initiated delegation in later phases.
+
+## Database schema
 
 Tables created by `001_init.sql`, sized for the phases ahead:
 
 - `workspaces` — one row per business/client (multi-tenant isolation)
-- `goals`, `tasks` — owner goals and the task DAG (orchestration lands in Phase 3)
+- `goals` — owner goals with status, delegation round, and final report
+- `tasks` — the task DAG: agent, instruction, acceptance criteria,
+  `depends_on`, status and result
 - `llm_calls` — every LLM call: prompts, tokens, estimated cost, latency, errors
 - `audit_log` — tool calls, approvals, config changes (Phase 2+)
 - `approvals` — human approval queue (Phase 7)
@@ -124,7 +177,7 @@ Tables created by `001_init.sql`, sized for the phases ahead:
 
 1. ✅ Scaffold, .env.example, DB schema, LLM provider, one working Gemini call
 2. ✅ Agent registry (`/agents/*.json`) + single-agent execution + full audit logging
-3. CEO orchestration, task DAG, TaskRunner with dependencies
+3. ✅ CEO orchestration, task DAG, TaskRunner with dependencies
 4. Tool system with per-agent permissions + sandbox
 5. Critic loop + revision rounds + escalation
 6. Company Brain (embeddings, retrieval, handbook injection)
