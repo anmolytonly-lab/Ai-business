@@ -6,6 +6,8 @@
  */
 import crypto from "node:crypto";
 import { logEvent } from "../audit";
+import { formatContext, search } from "../brain";
+import { withHandbook } from "../brain/handbook";
 import { generateStep, generateText } from "../llm/provider";
 import { GeminiContent, LlmUsage } from "../llm/types";
 import { callTool, declarationsForAgent } from "../tools/registry";
@@ -32,6 +34,8 @@ export interface AgentRunResult {
   /** True when the run's cost exceeded the agent's maxCostPerTask. */
   overBudget: boolean;
   toolCalls: ToolCallSummary[];
+  /** Knowledge-base chunks injected before the agent answered. */
+  contextUsed: { title: string; score: number }[];
 }
 
 function addUsage(a: LlmUsage, b: LlmUsage): LlmUsage {
@@ -64,8 +68,31 @@ export async function runAgent(
     workspaceId,
     ...(ctx.taskId !== undefined ? { taskId: ctx.taskId } : {}),
   };
+  // Every agent retrieves company context before answering, and every agent's
+  // prompt is bound by the company handbook.
+  let contextUsed: { title: string; score: number }[] = [];
+  let contextBlock = "";
+  try {
+    const hits = await search(workspaceId, instruction);
+    contextUsed = hits.map((h) => ({ title: h.title, score: Number(h.score.toFixed(3)) }));
+    contextBlock = formatContext(hits);
+  } catch (err) {
+    // Retrieval failure must not silently become an ungrounded answer.
+    console.error(
+      `knowledge base retrieval failed for ${agent.id}: ${err instanceof Error ? err.message : String(err)}`
+    );
+    logEvent({
+      agentId: agent.id,
+      workspaceId,
+      eventType: "brain_retrieval_failed",
+      detail: { runId, error: err instanceof Error ? err.message : String(err) },
+    });
+  }
+
+  const prompt = contextBlock === "" ? instruction : `${contextBlock}\n\n---\n\n${instruction}`;
+
   const llmOpts = {
-    systemPrompt: agent.systemPrompt,
+    systemPrompt: withHandbook(agent.systemPrompt),
     model: agent.model,
     temperature: agent.temperature,
     agentId: agent.id,
@@ -84,6 +111,7 @@ export async function runAgent(
       instruction,
       model: agent.model,
       toolsGranted: declarations.map((d) => d.name),
+      contextUsed,
     },
   });
 
@@ -101,13 +129,11 @@ export async function runAgent(
 
     if (declarations.length === 0) {
       // No tools granted — a single completion.
-      const result = await generateText(instruction, llmOpts);
+      const result = await generateText(prompt, llmOpts);
       output = result.text;
       usage = result.usage;
     } else {
-      const contents: GeminiContent[] = [
-        { role: "user", parts: [{ text: instruction }] },
-      ];
+      const contents: GeminiContent[] = [{ role: "user", parts: [{ text: prompt }] }];
       let finalText = "";
 
       for (let iteration = 1; iteration <= MAX_TOOL_ITERATIONS; iteration++) {
@@ -189,7 +215,7 @@ export async function runAgent(
       },
     });
 
-    return { runId, agentId: agent.id, output, usage, overBudget, toolCalls };
+    return { runId, agentId: agent.id, output, usage, overBudget, toolCalls, contextUsed };
   } catch (err) {
     logEvent({
       ...base,

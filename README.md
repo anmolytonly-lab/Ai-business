@@ -4,8 +4,8 @@ A fully autonomous AI-run business: an AI executive team handles strategy,
 product, marketing, sales, support, finance and reporting. A human owner sets
 goals and approves critical actions; everything else is automated.
 
-**Status: Phase 5 complete** — every deliverable is reviewed against its
-acceptance criteria, revised up to twice, then escalated to the human.
+**Status: Phase 6 complete** — a vector-backed Company Brain grounds every
+agent answer, and the company handbook binds every agent prompt.
 
 ## Stack
 
@@ -44,6 +44,8 @@ plan → DAG execution → report.
 sandbox, and an agent being refused a tool it wasn't granted.
 `npm run demo:critic` runs deliverables through the reviewer and prints each
 round's verdict.
+`npm run demo:brain` seeds the knowledge base, runs semantic search, and shows
+a grounded answer, a refusal on undocumented facts, and handbook enforcement.
 
 ### Endpoints
 
@@ -54,6 +56,12 @@ round's verdict.
 | `GET /api/agents` | Registry summary (id, department, reporting line, tools) |
 | `GET /api/agents/:id` | Full agent config including system prompt |
 | `POST /api/agents/:id/run` `{ "instruction": "..." }` | Execute one agent, fully audited |
+| `POST /api/documents` `{ "title", "content" }` | Add a document to the Company Brain |
+| `GET /api/documents` | List documents (source, review status, chunk count) |
+| `POST /api/documents/:id/approve` | Approve an agent-written learning |
+| `DELETE /api/documents/:id` | Remove a document and its vectors |
+| `POST /api/brain/search` `{ "query": "..." }` | Semantic search with scores |
+| `GET /api/handbook` | The company handbook text |
 | `GET /api/tools` | Available tools, sandbox root, shell whitelist |
 | `POST /api/goals` `{ "description": "..." }` | Set a goal; CEO plans and runs it (202, then poll) |
 | `GET /api/goals` | All goals with status and final report |
@@ -101,6 +109,9 @@ src/
   audit.ts               # audit_log write/read helpers
   orchestration/planner.ts  # CEO goal -> validated task DAG + hard caps
   orchestration/runner.ts   # TaskRunner: dependency-aware parallel execution
+  brain/index.ts         # Company Brain: index, retrieve, learnings, approval
+  brain/chunker.ts       # paragraph-aware chunking
+  brain/handbook.ts      # company_handbook.md injection + hot-reload
   orchestration/critic.ts   # reviewer routing, revision rounds, escalation
   orchestration/goals.ts    # create/execute/read goals
   tools/sandbox.ts       # workspace path resolution + command whitelist
@@ -120,6 +131,51 @@ workspace/               # agent filesystem sandbox (gitignored)
   index.ts               # Express server
 data/                    # SQLite database (gitignored)
 ```
+
+## Company Brain & handbook (Phase 6)
+
+### Knowledge base
+
+Documents are chunked (~1200 chars, paragraph-aligned, with overlap), embedded
+with `gemini-embedding-001` at 768 dimensions, and indexed in a `sqlite-vec`
+virtual table. **Every agent retrieves context before answering** — the top
+`BRAIN_TOP_K` (default 4) chunks for its instruction are prepended to its
+prompt, with an instruction to say so rather than invent when the answer isn't
+there. Retrieval is workspace-scoped, so one client's data can never surface in
+another's answers.
+
+Embedding happens before any database write, and the document, its chunks and
+its vectors are inserted in a single transaction — a failed embedding can never
+leave a document that agents would silently retrieve nothing from.
+
+Agents granted `kb_write` can record learnings back. Those are stored with
+`source: "agent"` and `needs_review: 1`, are labelled **UNREVIEWED** wherever
+they surface in retrieval, and stay flagged until the owner approves them via
+`POST /api/documents/:id/approve`.
+
+### Handbook injection
+
+`company_handbook.md` at the repo root is prepended to **every** agent's system
+prompt, ahead of its role instructions, with an explicit "if these conflict,
+the handbook wins". It carries brand voice, tone rules and forbidden claims
+(guaranteed outcomes, unverifiable statistics, fake social proof, competitor
+claims, regulatory claims). Edit it and the change applies immediately — it
+hot-reloads like the agent registry. Replace the placeholder "About the
+business" section with your own company details.
+
+### What this changed
+
+In Phase 2, asked "what is your refund policy?", `support_agent` **invented
+one**. With the Brain seeded it answers from the documents — correct windows,
+correct method, correct billing address — and when asked about an iPhone app
+that isn't documented it replies "That information is not in the knowledge
+base. I can escalate this…" instead of guessing. Asked for an ad promising
+"guaranteed 300% revenue growth", `ad_copywriter` now refuses and quotes the
+handbook rule it would breach.
+
+Covered by 23 tests: chunking bounds, handbook precedence, learning write-back
+and flagging, permission denial on `kb_write`, cross-workspace isolation, owner
+approval idempotency, and vector-index cleanup on delete.
 
 ## Critic loop (Phase 5)
 
@@ -178,7 +234,7 @@ one if it guessed the name.
 | `file_read` / `file_write` / `file_list` | developer, devops | Workspace-relative paths only |
 | `shell` | developer, devops, qa_tester | Whitelisted commands, no shell interpreter |
 | `db_query` | analyst, cfo, bookkeeper | Read-only SELECT, restricted tables |
-| `kb_search` / `kb_write` | most content agents | **Stub** until Phase 6 |
+| `kb_search` / `kb_write` | most content agents | Real: semantic search; writes are flagged for review |
 | `web_search` | researcher, seo_writer | **Stub** until Phase 10 |
 
 Stubs return an explicit "not available" message that tells the agent not to
@@ -271,7 +327,8 @@ Tables created by `001_init.sql`, sized for the phases ahead:
 - `reviews` — every critic verdict with feedback and the deliverable judged
 - `escalations` — work that failed review twice, awaiting a human decision
 - `approvals` — human approval queue (Phase 7)
-- `documents` — Company Brain source docs (Phase 6 adds chunking + embeddings)
+- `documents` / `document_chunks` / `vec_chunks` — Company Brain: source docs,
+  their chunks, and the sqlite-vec embedding index
 - `agent_memory` — per-agent episodic memory (Phase 9 adds compaction)
 
 ## LLM provider guarantees
@@ -290,7 +347,7 @@ Tables created by `001_init.sql`, sized for the phases ahead:
 3. ✅ CEO orchestration, task DAG, TaskRunner with dependencies
 4. ✅ Tool system with per-agent permissions + sandbox
 5. ✅ Critic loop + revision rounds + escalation
-6. Company Brain (embeddings, retrieval, handbook injection)
+6. ✅ Company Brain (embeddings, retrieval, handbook injection)
 7. Human approval queue + budget guard + kill switch
 8. React frontend: chat, org chart, task board, approval inbox, audit log
 9. Scheduler + autonomous routines + dashboard KPIs

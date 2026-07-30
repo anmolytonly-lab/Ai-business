@@ -266,6 +266,90 @@ export async function generateStep(
   return callGemini(contents, opts, tools);
 }
 
+interface EmbedResponse {
+  embedding?: { values?: number[] };
+  error?: { message?: string };
+}
+
+/**
+ * Embed text for the Company Brain. Same key, same backoff policy as
+ * generation, so all model access stays in this one module.
+ * `taskType` lets Gemini optimise query vs document embeddings.
+ */
+export async function embedText(
+  text: string,
+  taskType: "RETRIEVAL_DOCUMENT" | "RETRIEVAL_QUERY" = "RETRIEVAL_DOCUMENT"
+): Promise<number[]> {
+  const apiKey = requireGeminiKey();
+  const model = env.GEMINI_EMBEDDING_MODEL;
+  const url = `${API_BASE}/models/${model}:embedContent`;
+  const body = {
+    content: { parts: [{ text }] },
+    taskType,
+    outputDimensionality: env.EMBEDDING_DIMENSIONS,
+  };
+
+  let lastError: LlmError = new LlmError("embedding call failed before any attempt");
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+        body: JSON.stringify(body),
+      });
+    } catch (err) {
+      lastError = new LlmError(
+        `network error calling embeddings: ${err instanceof Error ? err.message : String(err)}`,
+        undefined,
+        true
+      );
+      if (attempt < MAX_ATTEMPTS) {
+        await sleep(BASE_BACKOFF_MS * 2 ** (attempt - 1));
+        continue;
+      }
+      break;
+    }
+
+    const raw = (await res.json().catch(() => ({}))) as EmbedResponse;
+    if (res.status === 429 || res.status >= 500) {
+      lastError = new LlmError(
+        `embeddings ${res.status}: ${raw.error?.message ?? res.statusText}`,
+        res.status,
+        true
+      );
+      if (attempt < MAX_ATTEMPTS) {
+        const wait = BASE_BACKOFF_MS * 2 ** (attempt - 1);
+        console.warn(`embeddings ${res.status}, retrying in ${wait}ms (attempt ${attempt}/${MAX_ATTEMPTS})`);
+        await sleep(wait);
+        continue;
+      }
+      break;
+    }
+    if (!res.ok) {
+      throw new LlmError(
+        `embeddings ${res.status}: ${raw.error?.message ?? res.statusText}`,
+        res.status,
+        false
+      );
+    }
+
+    const values = raw.embedding?.values;
+    if (values === undefined || values.length === 0) {
+      throw new LlmError("embeddings returned no vector", res.status, false);
+    }
+    if (values.length !== env.EMBEDDING_DIMENSIONS) {
+      throw new LlmError(
+        `embedding dimension mismatch: got ${values.length}, schema expects ${env.EMBEDDING_DIMENSIONS}`,
+        res.status,
+        false
+      );
+    }
+    return values;
+  }
+  throw lastError;
+}
+
 function stripFences(text: string): string {
   let t = text.trim();
   const fence = t.match(/^```(?:json)?\s*\n?([\s\S]*?)\n?```\s*$/);

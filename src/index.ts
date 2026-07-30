@@ -2,6 +2,15 @@ import express from "express";
 import { runAgent } from "./agents/executor";
 import { getAgent, initRegistry, listAgents } from "./agents/registry";
 import { getAuditLog, logEvent } from "./audit";
+import {
+  addDocument,
+  approveDocument,
+  deleteDocument,
+  getDocument,
+  listDocuments,
+  search,
+} from "./brain";
+import { getHandbook, initHandbook } from "./brain/handbook";
 import { env } from "./config/env";
 import { getDb, isVecAvailable } from "./db";
 import { generateText } from "./llm/provider";
@@ -35,13 +44,20 @@ app.get("/api/status", (_req, res) => {
     )
     .get() as { usd: number };
   res.json({
-    phase: 5,
+    phase: 6,
     database: env.DATABASE_PATH,
     migrations: migrations.map((m) => m.name),
     vectorSearch: isVecAvailable(),
     model: env.GEMINI_MODEL,
     geminiKeyConfigured: env.GEMINI_API_KEY !== "",
     agentsLoaded: listAgents().length,
+    documentsIndexed: (
+      db.prepare("SELECT COUNT(*) AS n FROM documents").get() as { n: number }
+    ).n,
+    chunksIndexed: (
+      db.prepare("SELECT COUNT(*) AS n FROM document_chunks").get() as { n: number }
+    ).n,
+    handbookLoaded: getHandbook().length > 0,
     llmCallsLogged: llmCalls.n,
     todaySpendUsd: spend.usd,
   });
@@ -87,6 +103,69 @@ app.post("/api/agents/:id/run", (req, res) => {
       const status = message.startsWith("unknown agent") ? 404 : 502;
       res.status(status).json({ error: message });
     });
+});
+
+// ── Company Brain ─────────────────────────────────────────────────────
+
+app.post("/api/documents", (req, res) => {
+  const title: unknown = req.body?.title;
+  const content: unknown = req.body?.content;
+  if (typeof title !== "string" || typeof content !== "string" || content.trim() === "") {
+    res.status(400).json({ error: 'body must be { "title": string, "content": string }' });
+    return;
+  }
+  addDocument({ workspaceId: DEFAULT_WORKSPACE_ID, title, content, source: "owner" })
+    .then((result) => res.status(201).json(result))
+    .catch((err: unknown) =>
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) })
+    );
+});
+
+app.get("/api/documents", (_req, res) => {
+  res.json(listDocuments(DEFAULT_WORKSPACE_ID));
+});
+
+app.get("/api/documents/:id", (req, res) => {
+  const doc = getDocument(req.params.id);
+  if (doc === undefined) {
+    res.status(404).json({ error: `unknown document "${req.params.id}"` });
+    return;
+  }
+  res.json(doc);
+});
+
+/** Approve an agent-written learning so it is no longer flagged unreviewed. */
+app.post("/api/documents/:id/approve", (req, res) => {
+  if (!approveDocument(req.params.id)) {
+    res.status(404).json({ error: "no unreviewed document with that id" });
+    return;
+  }
+  res.json({ ok: true });
+});
+
+app.delete("/api/documents/:id", (req, res) => {
+  if (!deleteDocument(req.params.id)) {
+    res.status(404).json({ error: `unknown document "${req.params.id}"` });
+    return;
+  }
+  res.json({ ok: true });
+});
+
+app.post("/api/brain/search", (req, res) => {
+  const query: unknown = req.body?.query;
+  if (typeof query !== "string" || query.trim() === "") {
+    res.status(400).json({ error: 'body must be { "query": string }' });
+    return;
+  }
+  search(DEFAULT_WORKSPACE_ID, query)
+    .then((hits) => res.json(hits))
+    .catch((err: unknown) =>
+      res.status(500).json({ error: err instanceof Error ? err.message : String(err) })
+    );
+});
+
+app.get("/api/handbook", (_req, res) => {
+  res.json({ content: getHandbook() });
 });
 
 // ── Tools ─────────────────────────────────────────────────────────────
@@ -191,15 +270,21 @@ app.post("/api/llm/test", (req, res) => {
 getDb(); // open DB + run migrations before accepting traffic
 ensureDefaultWorkspace();
 initRegistry();
-logEvent({ workspaceId: DEFAULT_WORKSPACE_ID, eventType: "server_started", detail: { phase: 5 } });
+initHandbook();
+logEvent({ workspaceId: DEFAULT_WORKSPACE_ID, eventType: "server_started", detail: { phase: 6 } });
 
 app.listen(env.PORT, () => {
-  console.log(`AgentCorp (Phase 5) listening on http://localhost:${env.PORT}`);
+  console.log(`AgentCorp (Phase 6) listening on http://localhost:${env.PORT}`);
   console.log(`  GET  /health`);
   console.log(`  GET  /api/status`);
   console.log(`  GET  /api/agents            list the registry`);
   console.log(`  GET  /api/agents/:id        full agent config`);
   console.log(`  POST /api/agents/:id/run    { "instruction": "..." }`);
+  console.log(`  POST /api/documents         { "title", "content" } -> index into the Brain`);
+  console.log(`  GET  /api/documents         list knowledge base documents`);
+  console.log(`  POST /api/documents/:id/approve   approve an agent learning`);
+  console.log(`  POST /api/brain/search      { "query": "..." } semantic search`);
+  console.log(`  GET  /api/handbook          the company handbook text`);
   console.log(`  GET  /api/tools             tools, sandbox root, shell whitelist`);
   console.log(`  POST /api/goals             { "description": "..." } -> CEO plans + runs DAG`);
   console.log(`  GET  /api/goals             list goals`);

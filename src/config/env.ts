@@ -36,6 +36,11 @@ const envSchema = z.object({
   AGENT_WORKSPACE_ROOT: z.string().default("./workspace"),
   /** Extra whitelisted shell commands, comma-separated. Empty by default. */
   SHELL_WHITELIST_EXTRA: z.string().default(""),
+  /** Company Brain embedding model and dimensionality (must match the schema). */
+  GEMINI_EMBEDDING_MODEL: z.string().default("gemini-embedding-001"),
+  EMBEDDING_DIMENSIONS: z.coerce.number().int().positive().default(768),
+  /** Chunks retrieved and injected into an agent's prompt before it answers. */
+  BRAIN_TOP_K: z.coerce.number().int().positive().default(4),
 });
 
 export type Env = z.infer<typeof envSchema>;

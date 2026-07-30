@@ -8,8 +8,9 @@ import { logEvent } from "../audit";
 import { SandboxViolation } from "./sandbox";
 import { dbQueryTool } from "./impl/db";
 import { fileListTool, fileReadTool, fileWriteTool } from "./impl/files";
+import { kbSearchTool, kbWriteTool } from "./impl/kb";
 import { shellTool } from "./impl/shell";
-import { kbSearchTool, kbWriteTool, webSearchTool } from "./impl/stubs";
+import { webSearchTool } from "./impl/stubs";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- heterogeneous
 // arg types across tools; each definition validates its own args with zod, so
 // the unsafe boundary is contained to the callTool() dispatch below.
