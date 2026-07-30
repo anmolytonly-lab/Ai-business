@@ -5,11 +5,13 @@
 
 # Dependencies
 node_modules/
+frontend/node_modules/
 
 # Build output
 dist/
 desktop/dist/
 frontend/dist/
+*.tsbuildinfo
 
 # Database files (per-workspace data lives here)
 data/*.db

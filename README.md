@@ -4,22 +4,21 @@ A fully autonomous AI-run business: an AI executive team handles strategy,
 product, marketing, sales, support, finance and reporting. A human owner sets
 goals and approves critical actions; everything else is automated.
 
-**Status: Phase 7 complete** — outbound actions are gated behind a human
-approval queue with a legal-compliance pass, spend is capped per task, per
-agent and per day, and a kill switch halts everything instantly.
+**Status: Phase 8 complete** — a React dashboard with CEO chat, live org
+chart, task board, approval inbox and audit log.
 
 ## Stack
 
 - Backend: Node.js ≥ 20 + Express, TypeScript strict
 - DB: SQLite (better-sqlite3), vector search via sqlite-vec (loaded now, used from Phase 6)
 - LLM: Gemini API through one provider module (`src/llm/provider.ts`)
-- Frontend (Phase 8): React + Vite + TailwindCSS + shadcn/ui
+- Frontend: React 18 + Vite + Tailwind v4 + shadcn/ui-style components
 - Desktop (Phase 11): Electron wrapper
 
 ## Setup
 
 ```bash
-npm install
+npm run setup          # installs backend + frontend deps and builds both
 cp .env.example .env   # then add your GEMINI_API_KEY
 ```
 
@@ -29,9 +28,25 @@ gitignored — keys never go in code.
 ## Run
 
 ```bash
-npm run build      # compile TypeScript + copy SQL migrations to dist/
-npm start          # start the API server (default http://localhost:3000)
-npm run dev        # build + start in one step
+npm start          # API + dashboard at http://localhost:3000
+```
+
+Open **http://localhost:3000** for the dashboard. The server serves the built
+frontend, so this one command runs the whole product.
+
+For frontend development with hot reload, run the API and Vite side by side:
+
+```bash
+npm start              # terminal 1 — API on :3000
+npm run frontend:dev   # terminal 2 — UI on :5173, proxies /api to :3000
+```
+
+Other scripts:
+
+```bash
+npm run build      # compile backend TypeScript + copy SQL migrations
+npm run build:all  # backend + frontend
+npm run dev        # build + start the API
 npm run migrate    # apply pending DB migrations and list applied ones
 npm run demo:llm   # Phase 1 demo: one Gemini call (text + validated JSON) with audit rows
 ```
@@ -69,6 +84,8 @@ halting an agent mid-flight, and the budget snapshot.
 | `DELETE /api/documents/:id` | Remove a document and its vectors |
 | `POST /api/brain/search` `{ "query": "..." }` | Semantic search with scores |
 | `GET /api/handbook` | The company handbook text |
+| `POST /api/chat` `{ "message", "history" }` | Talk to the CEO; flags goals |
+| `GET /api/agents/status` | Live per-agent activity for the org chart |
 | `GET /api/tools` | Available tools, sandbox root, shell whitelist |
 | `POST /api/goals` `{ "description": "..." }` | Set a goal; CEO plans and runs it (202, then poll) |
 | `GET /api/goals` | All goals with status and final report |
@@ -109,6 +126,11 @@ guard).
 
 ```
 agents/                  # one JSON file per agent (hot-reloaded)
+company_handbook.md      # brand voice + forbidden claims, injected everywhere
+frontend/                # React + Vite + Tailwind dashboard
+  src/lib/api.ts         # typed API client
+  src/components/ui/     # shadcn/ui-style primitives
+  src/views/             # Chat, OrgChart, TaskBoard, Approvals, AuditLog
 src/
   agents/schema.ts       # zod schema for agent config files
   agents/registry.ts     # load + validate + hot-reload the registry
@@ -116,6 +138,8 @@ src/
   audit.ts               # audit_log write/read helpers
   orchestration/planner.ts  # CEO goal -> validated task DAG + hard caps
   orchestration/runner.ts   # TaskRunner: dependency-aware parallel execution
+  chat.ts                # owner <-> CEO conversation
+  agents/status.ts       # live per-agent activity
   approvals/index.ts     # approval queue + legal_compliance gate
   safety/budget.ts       # daily and per-agent spend caps, 80% alert
   safety/killswitch.ts   # global halt, checked before every model and tool call
@@ -141,6 +165,39 @@ workspace/               # agent filesystem sandbox (gitignored)
   index.ts               # Express server
 data/                    # SQLite database (gitignored)
 ```
+
+## Dashboard (Phase 8)
+
+React 18 + Vite + Tailwind v4, with shadcn/ui-style primitives we own outright
+in `frontend/src/components/ui`. Five views, all polling live:
+
+- **Chat** — talk to the CEO. It answers grounded in the Company Brain and
+  aware of current state ("There are 4 approvals waiting on you"). When your
+  message is really a work request, it returns a **Run it** card with the goal
+  restated and success criteria; one click hands it to the orchestrator.
+- **Org chart** — all 27 agents by department, with reporting lines, tool
+  counts and gated-action badges. Agents pulse blue while working or
+  reviewing, polled every 2s.
+- **Tasks** — goals list plus a four-column board (Pending / In progress /
+  Completed / Needs attention) over the task DAG. Cards expand to show
+  acceptance criteria, dependencies and the full deliverable; revision rounds
+  and escalations are badged.
+- **Inbox** — approval cards showing the content, the legal review and its
+  flags, with Approve/Reject and an optional note. Escalations that failed
+  review twice appear beneath.
+- **Audit** — every event, filterable, expandable to the full JSON payload.
+
+The header carries live agent/document counts, today's spend against budget
+(amber past 80%), and the **kill switch** — one click halts every agent, with
+a red banner across the app while engaged.
+
+The frontend is served by the Express process from `frontend/dist`, so web
+and (later) Electron load the same bundle. Unknown non-API routes fall back to
+`index.html`. During development Vite proxies `/api` to port 3000.
+
+Verified by driving a real browser: all five tabs render against live data
+with **zero console errors**, and the chat round-trip was exercised
+end-to-end (a Company-Brain-grounded answer, then a goal-detection card).
 
 ## Approvals, budget & kill switch (Phase 7)
 
@@ -417,7 +474,7 @@ Tables created by `001_init.sql`, sized for the phases ahead:
 5. ✅ Critic loop + revision rounds + escalation
 6. ✅ Company Brain (embeddings, retrieval, handbook injection)
 7. ✅ Human approval queue + budget guard + kill switch
-8. React frontend: chat, org chart, task board, approval inbox, audit log
+8. ✅ React frontend: chat, org chart, task board, approval inbox, audit log
 9. Scheduler + autonomous routines + dashboard KPIs
 10. Integrations adapters (stubs), agent builder UI, workspaces
 11. Electron packaging + build scripts

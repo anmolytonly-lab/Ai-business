@@ -9,6 +9,7 @@ import crypto from "node:crypto";
 import { z } from "zod";
 import { runAgent } from "../agents/executor";
 import { getAgent } from "../agents/registry";
+import { setAgentStatus } from "../agents/status";
 import { logEvent } from "../audit";
 import { getDb } from "../db";
 import { generateJson } from "../llm/provider";
@@ -111,6 +112,24 @@ async function review(
     throw new Error(`reviewer agent "${reviewerId}" missing from registry`);
   }
 
+  setAgentStatus(reviewer.id, "reviewing", { taskId, detail: `reviewing ${producerId}'s work` });
+  try {
+    return await runReview(reviewer, producerId, taskId, workspaceId, instruction, acceptanceCriteria, deliverable, round);
+  } finally {
+    setAgentStatus(reviewer.id, "idle");
+  }
+}
+
+async function runReview(
+  reviewer: NonNullable<ReturnType<typeof getAgent>>,
+  producerId: string,
+  taskId: string,
+  workspaceId: string,
+  instruction: string,
+  acceptanceCriteria: string,
+  deliverable: string,
+  round: number
+): Promise<{ review: Review; usage: LlmUsage }> {
   const { data, usage } = await generateJson(
     buildReviewPrompt(producerId, instruction, acceptanceCriteria, deliverable, round),
     reviewSchema,

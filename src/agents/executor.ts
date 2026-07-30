@@ -12,6 +12,7 @@ import { generateStep, generateText } from "../llm/provider";
 import { GeminiContent, LlmUsage } from "../llm/types";
 import { callTool, declarationsForAgent } from "../tools/registry";
 import { getAgent } from "./registry";
+import { setAgentStatus } from "./status";
 
 /** Safety valve on tool loops — a stuck agent stops rather than spinning. */
 const MAX_TOOL_ITERATIONS = 8;
@@ -102,6 +103,11 @@ export async function runAgent(
   };
 
   const declarations = declarationsForAgent(agent.id);
+
+  setAgentStatus(agent.id, "working", {
+    ...(ctx.taskId !== undefined ? { taskId: ctx.taskId } : {}),
+    detail: instruction,
+  });
 
   logEvent({
     ...base,
@@ -223,5 +229,7 @@ export async function runAgent(
       detail: { runId, error: err instanceof Error ? err.message : String(err) },
     });
     throw err;
+  } finally {
+    setAgentStatus(agent.id, "idle");
   }
 }

@@ -17,7 +17,12 @@
     "demo:critic": "npm run build && node dist/scripts/demo-critic.js",
     "demo:brain": "npm run build && node dist/scripts/demo-brain.js",
     "demo:safety": "npm run build && node dist/scripts/demo-safety.js",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "frontend:install": "npm --prefix frontend install",
+    "frontend:dev": "npm --prefix frontend run dev",
+    "frontend:build": "npm --prefix frontend run build",
+    "build:all": "npm run build && npm run frontend:build",
+    "setup": "npm install && npm run frontend:install && npm run build:all"
   },
   "engines": {
     "node": ">=20"

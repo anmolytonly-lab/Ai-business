@@ -1,6 +1,10 @@
+import fs from "node:fs";
+import path from "node:path";
 import express from "express";
 import { runAgent } from "./agents/executor";
 import { getAgent, initRegistry, listAgents } from "./agents/registry";
+import { listAgentStatuses } from "./agents/status";
+import { ChatTurn, chatWithCeo } from "./chat";
 import { decideApproval, getApproval, listApprovals } from "./approvals";
 import { getAuditLog, logEvent } from "./audit";
 import { getSpendSnapshot } from "./safety/budget";
@@ -30,6 +34,19 @@ import { DEFAULT_WORKSPACE_ID, ensureDefaultWorkspace } from "./workspace";
 
 const app = express();
 app.use(express.json({ limit: "1mb" }));
+
+// The Vite dev server runs on a different port; in production the frontend is
+// served from this process, so same-origin. Hand-rolled to avoid a dependency.
+app.use((req, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,DELETE,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  if (req.method === "OPTIONS") {
+    res.sendStatus(204);
+    return;
+  }
+  next();
+});
 
 app.get("/health", (_req, res) => {
   res.json({ ok: true });
@@ -86,6 +103,11 @@ app.get("/api/agents", (_req, res) => {
   );
 });
 
+/** Live activity per agent, for the org chart. */
+app.get("/api/agents/status", (_req, res) => {
+  res.json(listAgentStatuses());
+});
+
 app.get("/api/agents/:id", (req, res) => {
   const agent = getAgent(req.params.id);
   if (agent === undefined) {
@@ -108,6 +130,31 @@ app.post("/api/agents/:id/run", (req, res) => {
       const status = message.startsWith("unknown agent") ? 404 : 502;
       res.status(status).json({ error: message });
     });
+});
+
+// ── Chat with the CEO ─────────────────────────────────────────────────
+
+app.post("/api/chat", (req, res) => {
+  const message: unknown = req.body?.message;
+  const history: unknown = req.body?.history;
+  if (typeof message !== "string" || message.trim() === "") {
+    res.status(400).json({ error: 'body must be { "message": string, "history"?: ChatTurn[] }' });
+    return;
+  }
+  const turns: ChatTurn[] = Array.isArray(history)
+    ? (history.filter(
+        (t): t is ChatTurn =>
+          typeof t === "object" &&
+          t !== null &&
+          (t as ChatTurn).role !== undefined &&
+          typeof (t as ChatTurn).content === "string"
+      ) as ChatTurn[])
+    : [];
+  chatWithCeo(DEFAULT_WORKSPACE_ID, message.trim(), turns)
+    .then((reply) => res.json(reply))
+    .catch((err: unknown) =>
+      res.status(502).json({ error: err instanceof Error ? err.message : String(err) })
+    );
 });
 
 // ── Approval queue, budget guard, kill switch ─────────────────────────
@@ -331,6 +378,28 @@ app.post("/api/llm/test", (req, res) => {
         .json({ error: err instanceof Error ? err.message : String(err) });
     });
 });
+
+// Serve the built frontend when it exists, so web and Electron load the same
+// bundle. Must come after the API routes; unknown non-API paths fall back to
+// index.html for client-side routing.
+const FRONTEND_DIST = path.resolve(__dirname, "../frontend/dist");
+if (fs.existsSync(FRONTEND_DIST)) {
+  app.use(express.static(FRONTEND_DIST));
+  app.get(/^\/(?!api\/).*/, (_req, res) => {
+    res.sendFile(path.join(FRONTEND_DIST, "index.html"));
+  });
+} else {
+  app.get("/", (_req, res) => {
+    res
+      .status(200)
+      .type("text/plain")
+      .send(
+        "AgentCorp API is running. The frontend is not built yet:\n" +
+          "  cd frontend && npm install && npm run build\n" +
+          "Then reload this page. API routes are under /api."
+      );
+  });
+}
 
 getDb(); // open DB + run migrations before accepting traffic
 ensureDefaultWorkspace();
