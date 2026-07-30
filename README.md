@@ -133,6 +133,24 @@ workspaces and integrations.
 | `GET /api/audit` `?limit=&agentId=&eventType=` | Audit trail |
 | `POST /api/llm/test` `{ "prompt": "..." }` | Raw provider call (Phase 1) |
 
+## Your business knowledge (`seed/`)
+
+The knowledge base lives in the SQLite database, which is gitignored — so the
+Markdown files in **`seed/`** are the portable, reviewable source of truth for
+what your agents know about your business.
+
+```bash
+npm run seed        # load every seed/*.md into the Company Brain
+```
+
+Each file's first `# Heading` becomes the document title and the rest is the
+body. Re-running replaces documents of the same title, so it is safe to run
+repeatedly — edit a file, re-seed, and the agents' knowledge updates.
+
+Anything **not** in `seed/` or `company_handbook.md` is something the agents
+will refuse to state. That is deliberate: an invented price or opening time is
+the most damaging thing an agent can tell a customer.
+
 ## Agent registry
 
 Agents are JSON files in `/agents/*.json` — never hardcoded. Files are

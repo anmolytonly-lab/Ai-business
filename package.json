@@ -28,7 +28,8 @@
     "package": "npm run build:all && electron-builder",
     "package:dir": "npm run build:all && electron-builder --dir",
     "rebuild:electron": "node -e \"const v=require('electron/package.json').version;const{execSync}=require('child_process');execSync('npm rebuild better-sqlite3 --runtime=electron --target='+v+' --dist-url=https://electronjs.org/headers --build-from-source',{stdio:'inherit'})\"",
-    "rebuild:node": "npm rebuild better-sqlite3"
+    "rebuild:node": "npm rebuild better-sqlite3",
+    "seed": "npm run build && node dist/scripts/seed-brain.js"
   },
   "engines": {
     "node": ">=20"
